@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { usePersistentList, useSetting } from "../lib/usePersistentState";
 import {
   Scissors, Calendar, Clock, User, Phone, Settings, Home, Users,
   Plus, Trash2, Pencil, Check, X, ChevronRight, ChevronLeft,
@@ -9,6 +8,8 @@ import {
   Wallet, Receipt, TrendingDown, Crown, BookOpen,
   Search, Download, CalendarDays, Timer, Image as ImageIcon, List
 } from "lucide-react";
+import { usePersistentList, useSetting } from "../lib/usePersistentState";
+import { supabase, isSupabaseConfigured } from "../lib/supabase";
 
 /* ============================================================================
    DESIGN TOKENS — Dark Luxury System
@@ -595,8 +596,7 @@ export default function BarberApp() {
   const [view, setView] = useState("landing"); // landing | client | admin
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [googleSignInOpen, setGoogleSignInOpen] = useState(false);
-  /* ---- persisted state: every value below is stored in Supabase and
-     live-synced across all connected devices (admin + clients) ---- */
+  /* ---- persisted state: stored in Supabase, live-synced across devices ---- */
   const [adminEmail, setAdminEmail] = useSetting("admin_email", ADMIN_EMAIL_DEFAULT);
   const [themeId, setThemeId] = useSetting("theme", "gold");
   const [businessName, setBusinessName] = useSetting("business_name", "בארבר שופ | TEL AVIV");
@@ -609,6 +609,7 @@ export default function BarberApp() {
   const [notificationLog, setNotificationLog] = usePersistentList("notification_log");
   const [expenses, setExpenses] = usePersistentList("expenses");
   const [journalEntries, setJournalEntries] = usePersistentList("journal_entries"); // separate index: "יומן"
+  const [adminNotifications, setAdminNotifications] = usePersistentList("admin_notifications"); // approval-request feed
   const [toasts, setToasts] = useState([]);
   const undoStash = useRef({});
 
@@ -631,7 +632,27 @@ export default function BarberApp() {
     setActivityLog((log) => [{ id: uid(), ts: Date.now(), action }, ...log].slice(0, 50));
   }, []);
 
-  function requestAdminAccess() {
+  /* pushes an event into the admin's Facebook-style notification feed */
+  const notifyAdmin = useCallback((type, payload = {}) => {
+    setAdminNotifications((ns) =>
+      [{ id: uid(), ts: Date.now(), type, read: false, handled: false, ...payload }, ...ns].slice(0, 100)
+    );
+  }, []);
+
+  async function requestAdminAccess() {
+    // if a verified session for the admin email already exists, skip the code
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const email = data?.session?.user?.email;
+        if (email && adminEmail && email.toLowerCase() === adminEmail.trim().toLowerCase()) {
+          setAdminUnlocked(true);
+          setView("admin");
+          logActivity(`מנהל נכנס (סשן מאומת קיים: ${email})`);
+          return;
+        }
+      } catch (e) { /* fall through to the gate */ }
+    }
     setGoogleSignInOpen(true);
   }
 
@@ -639,12 +660,15 @@ export default function BarberApp() {
     setAdminUnlocked(true);
     setGoogleSignInOpen(false);
     setView("admin");
-    logActivity(`מנהל התחבר עם חשבון Google (${email})`);
+    logActivity(`מנהל נכנס לאחר אימות קוד במייל (${email})`);
   }
 
   function lockAdmin() {
     setAdminUnlocked(false);
     setView("landing");
+    if (isSupabaseConfigured && supabase) {
+      supabase.auth.signOut().catch(() => {});
+    }
   }
 
   const themeVars = THEMES[themeId]?.vars || THEMES.gold.vars;
@@ -677,6 +701,7 @@ export default function BarberApp() {
           logActivity={logActivity}
           setNotificationLog={setNotificationLog}
           onBackToLanding={() => setView("landing")}
+          notifyAdmin={notifyAdmin}
         />
       )}
 
@@ -698,6 +723,8 @@ export default function BarberApp() {
           setExpenses={setExpenses}
           journalEntries={journalEntries}
           setJournalEntries={setJournalEntries}
+          adminNotifications={adminNotifications}
+          setAdminNotifications={setAdminNotifications}
           pushToast={pushToast}
           undoStash={undoStash}
           logActivity={logActivity}
@@ -712,7 +739,7 @@ export default function BarberApp() {
       )}
 
       {googleSignInOpen && (
-        <GoogleSignInGate
+        <EmailOtpGate
           adminEmail={adminEmail}
           onSuccess={handleGoogleSuccess}
           onClose={() => setGoogleSignInOpen(false)}
@@ -756,126 +783,170 @@ function LandingScreen({ businessName, logo, onChooseClient, onChooseAdmin }) {
 }
 
 /* ============================================================================
-   ADMIN ACCESS — Google Sign-In gate, restricted to a single authorized email.
-   In production this check happens server-side (Supabase Auth + RLS
-   comparing the verified Google account email against the owner's email);
-   this is a UI-accurate simulation of that flow for the prototype.
+   ADMIN ACCESS — email verification gate.
+   The admin email is shown automatically; a 6-digit one-time code is sent to
+   that inbox (Supabase Auth OTP in the deployed build) and must be entered to
+   unlock the admin panel. Nobody without access to the inbox can get in.
+   In the in-chat prototype (no backend) this runs in a labeled demo mode.
    ============================================================================ */
-function GoogleSignInGate({ adminEmail, onSuccess, onClose }) {
-  const [stage, setStage] = useState("start"); // start | picking | denied
-  const [deniedEmail, setDeniedEmail] = useState("");
-  const [manualEmail, setManualEmail] = useState("");
+function EmailOtpGate({ adminEmail, onSuccess, onClose }) {
+  const [stage, setStage] = useState("start"); // start | code
+  const [code, setCode] = useState("");
+  const [sending, setSending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [demoCode, setDemoCode] = useState(null); // prototype fallback only
 
-  const mockAccounts = useMemo(() => {
-    const list = [{ email: adminEmail, name: adminEmail.split("@")[0] }];
-    if (adminEmail.toLowerCase() !== "guest.user@gmail.com") {
-      list.push({ email: "guest.user@gmail.com", name: "Guest User" });
-    }
-    return list;
-  }, [adminEmail]);
-
-  function pick(email) {
-    if (email.trim().toLowerCase() === adminEmail.trim().toLowerCase()) {
-      onSuccess(email);
+  async function sendCode() {
+    setSending(true);
+    setError("");
+    setInfo("");
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { error: err } = await supabase.auth.signInWithOtp({
+          email: adminEmail.trim(),
+          options: { shouldCreateUser: true },
+        });
+        setSending(false);
+        if (err) {
+          setError("שליחת הקוד נכשלה: " + err.message);
+          return;
+        }
+        setStage("code");
+        setInfo("קוד בן 6 ספרות נשלח אל " + adminEmail);
+      } catch (e) {
+        setSending(false);
+        setError("שגיאת רשת בשליחת הקוד — נסו שוב");
+      }
     } else {
-      setDeniedEmail(email);
-      setStage("denied");
+      // demo mode — no backend available to actually send email
+      const c = String(Math.floor(100000 + Math.random() * 900000));
+      setDemoCode(c);
+      setSending(false);
+      setStage("code");
     }
+  }
+
+  async function verify(theCode) {
+    const token = (theCode ?? code).trim();
+    if (token.length !== 6) return;
+    setVerifying(true);
+    setError("");
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data, error: err } = await supabase.auth.verifyOtp({
+          email: adminEmail.trim(),
+          token,
+          type: "email",
+        });
+        setVerifying(false);
+        if (err || !data?.session) {
+          setError("קוד שגוי או שפג תוקפו — נסו שוב");
+          setCode("");
+          return;
+        }
+        onSuccess(adminEmail);
+      } catch (e) {
+        setVerifying(false);
+        setError("שגיאת רשת באימות — נסו שוב");
+      }
+    } else {
+      setVerifying(false);
+      if (token === demoCode) onSuccess(adminEmail);
+      else {
+        setError("קוד שגוי — נסו שוב");
+        setCode("");
+      }
+    }
+  }
+
+  function onCodeChange(v) {
+    const clean = v.replace(/\D/g, "").slice(0, 6);
+    setCode(clean);
+    if (clean.length === 6) verify(clean);
   }
 
   return (
     <div className="bb-modal-backdrop" style={{ alignItems: "center" }} onClick={onClose}>
       <div className="bb-modal" style={{ borderRadius: 20, maxWidth: 360 }} onClick={(e) => e.stopPropagation()}>
-        {stage === "start" && (
-          <div style={{ textAlign: "center" }}>
-            <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
-              <div style={{ width: 52, height: 52, borderRadius: "50%", background: "var(--gold-wash)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <ShieldCheck size={24} color="var(--gold-bright)" />
-              </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+            <div style={{ width: 52, height: 52, borderRadius: "50%", background: "var(--gold-wash)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <ShieldCheck size={24} color="var(--gold-bright)" />
             </div>
-            <h3 className="bb-serif" style={{ fontSize: 17, marginBottom: 4 }}>כניסת מנהל</h3>
-            <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 22 }}>
-              הגישה לפאנל הניהול מותנית בהתחברות עם חשבון ה-Google המורשה בלבד
-            </p>
-            <button
-              className="bb-btn bb-btn-ghost"
-              style={{ width: "100%", background: "#fff", color: "#1f1f1f", fontWeight: 600, gap: 10 }}
-              onClick={() => setStage("picking")}
-            >
-              <GoogleG size={18} />
-              המשך עם Google
-            </button>
-            <button className="bb-btn bb-btn-ghost" style={{ width: "100%", marginTop: 10, opacity: 0.7 }} onClick={onClose}>ביטול</button>
           </div>
-        )}
+          <h3 className="bb-serif" style={{ fontSize: 17, marginBottom: 4 }}>כניסת מנהל</h3>
 
-        {stage === "picking" && (
-          <div>
-            <h3 className="bb-serif" style={{ fontSize: 16, marginBottom: 4, textAlign: "center" }}>בחירת חשבון</h3>
-            <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16, textAlign: "center" }}>לצורך גישה לפאנל הניהול</p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-              {mockAccounts.map((acc) => (
-                <button
-                  key={acc.email}
-                  className="bb-row"
-                  style={{ width: "100%", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 12, cursor: "pointer", textAlign: "right" }}
-                  onClick={() => pick(acc.email)}
-                >
-                  <div className="bb-avatar">{initials(acc.name)}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>{acc.name}</div>
-                    <div style={{ fontSize: 12, color: "var(--muted-dim)" }}>{acc.email}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+          {stage === "start" && (
+            <>
+              <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 16 }}>
+                קוד אימות חד-פעמי יישלח לכתובת המנהל הרשומה:
+              </p>
+              <div className="bb-card" style={{ padding: "12px 14px", marginBottom: 18, display: "flex", alignItems: "center", gap: 9, justifyContent: "center" }}>
+                <Lock size={14} color="var(--gold)" />
+                <span dir="ltr" style={{ fontSize: 14, fontWeight: 600 }}>{adminEmail}</span>
+              </div>
+              {error && (
+                <div style={{ fontSize: 12.5, color: "var(--danger)", marginBottom: 12 }}>{error}</div>
+              )}
+              <button className="bb-btn bb-btn-primary" style={{ width: "100%" }} disabled={sending} onClick={sendCode}>
+                {sending ? <><Loader2 size={16} style={{ animation: "spin 0.8s linear infinite" }} /> שולח קוד...</> : "שליחת קוד אימות למייל"}
+              </button>
+              <button className="bb-btn bb-btn-ghost" style={{ width: "100%", marginTop: 10, opacity: 0.75 }} onClick={onClose}>ביטול</button>
+            </>
+          )}
+
+          {stage === "code" && (
+            <>
+              <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 6 }}>
+                הזינו את הקוד בן 6 הספרות שנשלח אל
+              </p>
+              <p dir="ltr" style={{ fontSize: 13, fontWeight: 700, color: "var(--gold-bright)", marginBottom: 16 }}>{adminEmail}</p>
+
+              {!isSupabaseConfigured && demoCode && (
+                <div style={{ background: "var(--warning-wash)", border: "1px solid rgba(209,168,92,0.3)", borderRadius: 10, padding: "8px 10px", marginBottom: 14, fontSize: 11.5, color: "var(--warning)" }}>
+                  מצב הדגמה (ללא שרת מייל): הקוד הוא <b dir="ltr">{demoCode}</b>. בגרסה החיה הקוד מגיע למייל בלבד.
+                </div>
+              )}
+
               <input
-                placeholder="או הזינו כתובת אחרת לבדיקה"
-                value={manualEmail}
-                onChange={(e) => setManualEmail(e.target.value)}
-                style={{ flex: 1, background: "var(--bg-card)", border: "1.5px solid var(--border)", borderRadius: 10, padding: "10px 12px", color: "var(--cream)", fontSize: 13 }}
+                autoFocus
+                dir="ltr"
+                value={code}
+                onChange={(e) => onCodeChange(e.target.value)}
+                inputMode="numeric"
+                placeholder="• • • • • •"
+                style={{
+                  width: "100%", textAlign: "center", letterSpacing: 10,
+                  fontSize: 24, fontWeight: 700, fontFamily: "Heebo",
+                  background: "var(--bg-card)", color: "var(--cream)",
+                  border: error ? "1.5px solid var(--danger)" : "1.5px solid var(--border)",
+                  borderRadius: 12, padding: "13px 10px", marginBottom: 10,
+                }}
               />
-              <button className="bb-btn bb-btn-ghost bb-btn-sm" onClick={() => manualEmail && pick(manualEmail)}>כניסה</button>
-            </div>
-          </div>
-        )}
+              {error && <div style={{ fontSize: 12.5, color: "var(--danger)", marginBottom: 8 }}>{error}</div>}
+              {info && !error && <div style={{ fontSize: 11.5, color: "var(--muted-dim)", marginBottom: 8 }}>{info}</div>}
 
-        {stage === "denied" && (
-          <div style={{ textAlign: "center" }}>
-            <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
-              <div style={{ width: 52, height: 52, borderRadius: "50%", background: "var(--danger-wash)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <AlertTriangle size={22} color="var(--danger)" />
-              </div>
-            </div>
-            <h3 className="bb-serif" style={{ fontSize: 16, marginBottom: 6 }}>אין הרשאת גישה</h3>
-            <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 20, lineHeight: 1.7 }}>
-              החשבון <b style={{ color: "var(--cream)" }}>{deniedEmail}</b> אינו מורשה לפאנל הניהול. רק חשבון המנהל הרשום יכול להיכנס.
-            </p>
-            <button className="bb-btn bb-btn-primary" style={{ width: "100%" }} onClick={() => setStage("picking")}>נסה חשבון אחר</button>
-            <button className="bb-btn bb-btn-ghost" style={{ width: "100%", marginTop: 10 }} onClick={onClose}>ביטול</button>
-          </div>
-        )}
+              <button className="bb-btn bb-btn-primary" style={{ width: "100%" }} disabled={verifying || code.length !== 6} onClick={() => verify()}>
+                {verifying ? <><Loader2 size={16} style={{ animation: "spin 0.8s linear infinite" }} /> מאמת...</> : "אישור וכניסה"}
+              </button>
+              <button className="bb-btn bb-btn-ghost" style={{ width: "100%", marginTop: 10, fontSize: 13 }} disabled={sending} onClick={sendCode}>
+                {sending ? "שולח..." : "שליחת קוד חדש"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
-  );
-}
-
-function GoogleG({ size = 18 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48">
-      <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.8 32.6 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l6-6C34.6 5.1 29.6 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.2-.1-2.4-.4-3.5z"/>
-      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l6-6C34.6 5.1 29.6 3 24 3 16 3 9.1 7.6 6.3 14.7z"/>
-      <path fill="#4CAF50" d="M24 45c5.4 0 10.4-1.9 14.2-5.1l-6.6-5.5c-2 1.4-4.6 2.3-7.6 2.3-5.3 0-9.7-3.4-11.3-8.1l-6.6 5.1C9 40.4 15.9 45 24 45z"/>
-      <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-1 2.7-2.8 5-5.1 6.5l6.6 5.5C40.4 37 44 31 44 24c0-1.2-.1-2.4-.4-3.5z"/>
-    </svg>
   );
 }
 
 /* ============================================================================
    CLIENT BOOKING FLOW
    ============================================================================ */
-function ClientView({ businessName, logo, services, appointments, weeklyHours, setAppointments, clients, setClients, pushToast, logActivity, setNotificationLog, onBackToLanding }) {
+function ClientView({ businessName, logo, services, appointments, weeklyHours, setAppointments, clients, setClients, pushToast, logActivity, setNotificationLog, onBackToLanding, notifyAdmin }) {
   const [myBookingIds, setMyBookingIds] = useState([]); // appointments booked in this session — powers "התור שלי"
   const [myApptsOpen, setMyApptsOpen] = useState(false);
   const [step, setStep] = useState(1); // 1 service, 2 datetime, 3 details, 4 confirm, 5 success
@@ -984,11 +1055,19 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
         time: selectedTime,
         duration: client.defaultDuration || DEFAULT_APPT_DURATION,
         price: selectedService.price,
-        status: "confirmed",
+        status: "pending", // every client request awaits the barber's one-tap approval
         createdAt: Date.now(),
       };
       setAppointments((a) => [...a, appt]);
-      logActivity(`הוזמן תור חדש: ${name} · ${selectedService.name} · ${dateKey} ${selectedTime}`);
+      logActivity(`התקבלה בקשת תור: ${name} · ${selectedService.name} · ${dateKey} ${selectedTime}`);
+      notifyAdmin && notifyAdmin("new_booking", {
+        apptId: appt.id,
+        clientName: name,
+        serviceName: selectedService.name,
+        date: dateKey,
+        time: selectedTime,
+        phone: phone || "",
+      });
       setMyBookingIds((ids) => [...ids, appt.id]);
       vibrate([16, 40, 24]); // subtle success pattern on mobile
       setBookedAppt(appt);
@@ -1222,16 +1301,23 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
                 <Check size={40} strokeWidth={2.5} />
               </div>
             </div>
-            <h2 className="bb-serif" style={{ fontSize: 23, marginTop: 22, marginBottom: 6 }}>התור נקבע בהצלחה!</h2>
-            <p style={{ color: "var(--muted)", fontSize: 14, marginBottom: 22 }}>
+            <h2 className="bb-serif" style={{ fontSize: 23, marginTop: 22, marginBottom: 6 }}>הבקשה נשלחה!</h2>
+            <p style={{ color: "var(--muted)", fontSize: 14, marginBottom: 12 }}>
               {selectedService?.name} · {DOW_FULL_HE[selectedDate?.getDay()]} {selectedDate?.getDate()}/{selectedDate?.getMonth() + 1} בשעה {selectedTime}
+            </p>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "var(--warning-wash)", border: "1px solid rgba(209,168,92,0.3)", borderRadius: 20, padding: "6px 14px", marginBottom: 20 }}>
+              <Clock size={13} color="var(--warning)" />
+              <span style={{ fontSize: 12.5, color: "var(--warning)", fontWeight: 600 }}>ממתין לאישור המספרה</span>
+            </div>
+            <p style={{ color: "var(--muted-dim)", fontSize: 12, marginBottom: 18, lineHeight: 1.7 }}>
+              המספרה תאשר את התור בהקדם. ניתן לעקוב אחרי הסטטוס ב"התור שלי".
             </p>
 
             <div className="bb-card" style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", marginBottom: 22 }}>
               <MessageCircle size={16} color={whatsappStatus === "sent" ? "var(--success)" : "var(--muted)"} />
-              {whatsappStatus === "sending" && <span style={{ fontSize: 13, color: "var(--muted)" }}>שולח אישור בוואטסאפ...</span>}
-              {whatsappStatus === "sent" && <span style={{ fontSize: 13, color: "var(--success)" }}>אישור נשלח בוואטסאפ ✓</span>}
-              {whatsappStatus === "no_phone" && <span style={{ fontSize: 13, color: "var(--muted)" }}>לא הוזן טלפון — לא תישלח תזכורת</span>}
+              {whatsappStatus === "sending" && <span style={{ fontSize: 13, color: "var(--muted)" }}>שולח עדכון בוואטסאפ...</span>}
+              {whatsappStatus === "sent" && <span style={{ fontSize: 13, color: "var(--success)" }}>קבלת הבקשה נשלחה בוואטסאפ ✓</span>}
+              {whatsappStatus === "no_phone" && <span style={{ fontSize: 13, color: "var(--muted)" }}>לא הוזן טלפון — לא יישלחו עדכונים</span>}
             </div>
 
             <button
@@ -1293,6 +1379,13 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
             }
             setAppointments((appts) => appts.map((a) => (a.id === appt.id ? { ...a, status: "cancelled" } : a)));
             logActivity(`לקוח ביטל תור: ${appt.clientName} · ${appt.date} ${appt.time}`);
+            notifyAdmin && notifyAdmin("client_cancelled", {
+              apptId: appt.id,
+              clientName: appt.clientName,
+              serviceName: appt.serviceName,
+              date: appt.date,
+              time: appt.time,
+            });
             vibrate(12);
             pushToast("התור בוטל בהצלחה", { type: "success" });
           }}
@@ -1376,11 +1469,59 @@ const ADMIN_TABS = [
 ];
 
 function AdminView(props) {
-  const { businessName, setBusinessName, appointments, clients, services, activityLog, notificationLog, logActivity, onLock } = props;
+  const { businessName, setBusinessName, appointments, setAppointments, clients, services, activityLog, notificationLog, adminNotifications, setAdminNotifications, pushToast, logActivity, onLock } = props;
   const [tab, setTab] = useState("dashboard");
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(businessName);
   const [loadingTab, setLoadingTab] = useState(false);
+  const [bellOpen, setBellOpen] = useState(false);
+  const [popupNotif, setPopupNotif] = useState(null);
+  const prevTopNotifId = useRef(adminNotifications?.[0]?.id ?? null);
+
+  const unreadCount = (adminNotifications || []).filter((n) => !n.read).length;
+
+  /* Facebook-style corner popup whenever a new notification lands while the
+     admin panel is open (arrives live via Realtime in the deployed build) */
+  useEffect(() => {
+    const top = adminNotifications?.[0];
+    if (top && top.id !== prevTopNotifId.current) {
+      prevTopNotifId.current = top.id;
+      if (!top.read && !top.handled) {
+        setPopupNotif(top);
+        vibrate(20);
+        const t = setTimeout(() => setPopupNotif(null), 8000);
+        return () => clearTimeout(t);
+      }
+    } else if (top) {
+      prevTopNotifId.current = top.id;
+    }
+  }, [adminNotifications]);
+
+  /* one-tap approve / decline for a booking request */
+  function decideAppointment(apptId, decision, notifId) {
+    setAppointments((as) => as.map((a) => (a.id === apptId ? { ...a, status: decision } : a)));
+    if (notifId) {
+      setAdminNotifications((ns) => ns.map((n) => (n.id === notifId ? { ...n, handled: true, read: true } : n)));
+    } else {
+      // approve via dashboard quick-action: mark the matching notification handled too
+      setAdminNotifications((ns) => ns.map((n) => (n.apptId === apptId ? { ...n, handled: true, read: true } : n)));
+    }
+    const appt = appointments.find((a) => a.id === apptId);
+    if (decision === "confirmed") {
+      logActivity(`התור של ${appt?.clientName || ""} אושר`);
+      pushToast && pushToast("התור אושר ✓", { type: "success" });
+    } else {
+      logActivity(`בקשת התור של ${appt?.clientName || ""} נדחתה`);
+      pushToast && pushToast("הבקשה נדחתה", { type: "danger" });
+    }
+    setPopupNotif(null);
+  }
+
+  function openBell() {
+    setBellOpen((o) => !o);
+    // opening the panel marks everything as read (badge clears)
+    setAdminNotifications((ns) => ns.map((n) => (n.read ? n : { ...n, read: true })));
+  }
 
   useEffect(() => {
     setLoadingTab(true);
@@ -1428,7 +1569,33 @@ function AdminView(props) {
         >
           <Lock size={14} /> התנתקות
         </button>
+        <div style={{ position: "relative" }}>
+          <button className="bb-icon-btn" onClick={openBell} title="התראות" style={{ position: "relative" }}>
+            <Bell size={19} />
+            {unreadCount > 0 && (
+              <span style={{ position: "absolute", top: -2, left: -2, background: "var(--danger)", color: "#fff", fontSize: 9.5, fontWeight: 700, borderRadius: 10, minWidth: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+            )}
+          </button>
+          {bellOpen && (
+            <NotificationPanel
+              notifications={adminNotifications}
+              appointments={appointments}
+              onDecide={decideAppointment}
+              onClose={() => setBellOpen(false)}
+            />
+          )}
+        </div>
       </div>
+
+      {popupNotif && (
+        <NotificationPopup
+          notif={popupNotif}
+          onDecide={decideAppointment}
+          onClose={() => setPopupNotif(null)}
+        />
+      )}
 
       <div className="bb-admin-tabs">
         {ADMIN_TABS.map((t) => (
@@ -1463,8 +1630,113 @@ function AdminView(props) {
   );
 }
 
+/* ---------- ADMIN NOTIFICATIONS — bell panel + Facebook-style corner popup ---------- */
+function notifTexts(n) {
+  if (n.type === "new_booking") {
+    return {
+      title: "בקשת תור חדשה",
+      body: `${n.clientName} מבקש/ת תור: ${n.serviceName} · ${n.date} בשעה ${n.time}`,
+    };
+  }
+  if (n.type === "client_cancelled") {
+    return {
+      title: "לקוח ביטל תור",
+      body: `${n.clientName} ביטל/ה את התור: ${n.serviceName} · ${n.date} בשעה ${n.time}`,
+    };
+  }
+  return { title: "עדכון", body: "" };
+}
+
+function NotificationPanel({ notifications, appointments, onDecide, onClose }) {
+  return (
+    <>
+      <div style={{ position: "fixed", inset: 0, zIndex: 60 }} onClick={onClose} />
+      <div style={{ position: "absolute", top: "calc(100% + 8px)", left: 0, width: 330, maxHeight: 420, overflowY: "auto", background: "var(--bg-elevated)", border: "1px solid var(--border-light)", borderRadius: 14, boxShadow: "0 12px 32px rgba(0,0,0,0.5)", zIndex: 70 }}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", fontWeight: 700, fontSize: 14 }}>התראות</div>
+        {(!notifications || notifications.length === 0) ? (
+          <div style={{ padding: "28px 16px", textAlign: "center", color: "var(--muted-dim)", fontSize: 13 }}>
+            אין התראות עדיין — בקשות תור חדשות יופיעו כאן
+          </div>
+        ) : (
+          notifications.map((n) => {
+            const t = notifTexts(n);
+            const appt = appointments.find((a) => a.id === n.apptId);
+            const stillPending = n.type === "new_booking" && !n.handled && appt?.status === "pending";
+            return (
+              <div key={n.id} style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", background: n.read ? "transparent" : "var(--gold-wash)" }}>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 3, display: "flex", alignItems: "center", gap: 6 }}>
+                  {n.type === "new_booking" ? <CalendarClock size={13} color="var(--gold-bright)" /> : <X size={13} color="var(--danger)" />}
+                  {t.title}
+                </div>
+                <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.6 }}>{t.body}</div>
+                <div style={{ fontSize: 10.5, color: "var(--muted-dim)", marginTop: 4 }}>
+                  {new Date(n.ts).toLocaleString("he-IL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                </div>
+                {stillPending && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <button className="bb-btn bb-btn-primary bb-btn-sm" style={{ flex: 1 }} onClick={() => onDecide(n.apptId, "confirmed", n.id)}>
+                      <Check size={14} /> אישור
+                    </button>
+                    <button className="bb-btn bb-btn-danger bb-btn-sm" style={{ flex: 1 }} onClick={() => onDecide(n.apptId, "cancelled", n.id)}>
+                      <X size={14} /> דחייה
+                    </button>
+                  </div>
+                )}
+                {n.type === "new_booking" && n.handled && (
+                  <div style={{ fontSize: 11, color: appt?.status === "confirmed" ? "var(--success)" : "var(--danger)", marginTop: 6, fontWeight: 600 }}>
+                    {appt?.status === "confirmed" ? "✓ אושר" : "✗ נדחה"}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </>
+  );
+}
+
+function NotificationPopup({ notif, onDecide, onClose }) {
+  const t = notifTexts(notif);
+  const isBooking = notif.type === "new_booking" && !notif.handled;
+  return (
+    <div style={{ position: "fixed", bottom: 20, left: 16, zIndex: 95, width: 300, background: "var(--bg-elevated)", border: "1.5px solid var(--gold)", borderRadius: 14, padding: 14, boxShadow: "0 12px 36px rgba(0,0,0,0.55)", animation: "bb-note-in .3s ease" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, fontWeight: 700, fontSize: 13.5, color: "var(--gold-bright)" }}>
+          <Bell size={15} /> {t.title}
+        </div>
+        <button className="bb-icon-btn" style={{ padding: 2 }} onClick={onClose}><X size={15} /></button>
+      </div>
+      <div style={{ fontSize: 13, color: "var(--cream)", margin: "8px 0 4px", lineHeight: 1.6 }}>{t.body}</div>
+      {isBooking && (
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button className="bb-btn bb-btn-primary bb-btn-sm" style={{ flex: 1 }} onClick={() => onDecide(notif.apptId, "confirmed", notif.id)}>
+            <Check size={14} /> אישור
+          </button>
+          <button className="bb-btn bb-btn-danger bb-btn-sm" style={{ flex: 1 }} onClick={() => onDecide(notif.apptId, "cancelled", notif.id)}>
+            <X size={14} /> דחייה
+          </button>
+        </div>
+      )}
+      <style>{`@keyframes bb-note-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }`}</style>
+    </div>
+  );
+}
+
 /* ---------- DASHBOARD ---------- */
-function DashboardTab({ appointments, clients, services, notificationLog, setAppointments, logActivity, pushToast, undoStash }) {
+function DashboardTab({ appointments, clients, services, notificationLog, setAppointments, adminNotifications, setAdminNotifications, logActivity, pushToast, undoStash }) {
+  const pendingRequests = appointments
+    .filter((a) => a.status === "pending")
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+
+  function quickDecide(apptId, decision) {
+    setAppointments((as) => as.map((a) => (a.id === apptId ? { ...a, status: decision } : a)));
+    setAdminNotifications && setAdminNotifications((ns) => ns.map((n) => (n.apptId === apptId ? { ...n, handled: true, read: true } : n)));
+    const appt = appointments.find((a) => a.id === apptId);
+    logActivity(decision === "confirmed" ? `התור של ${appt?.clientName || ""} אושר` : `בקשת התור של ${appt?.clientName || ""} נדחתה`);
+    pushToast && pushToast(decision === "confirmed" ? "התור אושר ✓" : "הבקשה נדחתה", { type: decision === "confirmed" ? "success" : "danger" });
+  }
+
   const [editingAppt, setEditingAppt] = useState(null);
   const [tick, setTick] = useState(0); // re-render every 30s so the live "in the chair" timer stays fresh
   useEffect(() => {
@@ -1526,6 +1798,31 @@ function DashboardTab({ appointments, clients, services, notificationLog, setApp
       </div>
 
       <div style={{ padding: "0 16px" }}>
+        {pendingRequests.length > 0 && (
+          <div className="bb-card" style={{ border: "1.5px solid var(--warning)", background: "var(--warning-wash)", marginBottom: 12, padding: "14px 14px 6px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <Bell size={15} color="var(--warning)" />
+              <span style={{ fontWeight: 700, fontSize: 14, color: "var(--warning)" }}>
+                {pendingRequests.length} בקשות תור ממתינות לאישור שלך
+              </span>
+            </div>
+            {pendingRequests.map((a) => (
+              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: "1px solid rgba(209,168,92,0.2)" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13.5 }}>{a.clientName}</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>{a.serviceName} · {a.date} · {a.time}{a.phone ? ` · ${a.phone}` : ""}</div>
+                </div>
+                <button className="bb-btn bb-btn-primary bb-btn-sm" onClick={() => quickDecide(a.id, "confirmed")}>
+                  <Check size={14} /> אישור
+                </button>
+                <button className="bb-btn bb-btn-danger bb-btn-sm" onClick={() => quickDecide(a.id, "cancelled")}>
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {currentAppt && (
           <div className="bb-card" style={{ border: "1.5px solid var(--gold)", background: "var(--gold-wash)", display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
             <div style={{ width: 40, height: 40, borderRadius: "50%", background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -1555,6 +1852,7 @@ function DashboardTab({ appointments, clients, services, notificationLog, setApp
 
         <SectionTitle title="בריאות המערכת" style={{ marginTop: 26 }} />
         <div className="bb-card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <SystemHealthRow label="חיבור בסיס נתונים" ok={isSupabaseConfigured} detail={isSupabaseConfigured ? "מחובר ומסונכרן" : "מצב מקומי — נתונים לא נשמרים בין מכשירים"} />
           <SystemHealthRow label="שליחת תזכורות (Cron)" ok={true} detail="ריצה אחרונה: לפני 12 דק׳" />
           <SystemHealthRow label="חיתוך ביטול 2 שעות" ok={true} detail="ריצה אחרונה: לפני 3 דק׳" />
           <SystemHealthRow label="גיבוי בסיס נתונים" ok={true} detail="גיבוי אחרון: הלילה 03:00" />
@@ -2767,13 +3065,13 @@ function SettingsTab({ notificationLog, adminEmail, setAdminEmail, themeId, setT
 
   return (
     <div style={{ padding: "0 16px" }}>
-      <SectionTitle title="חשבון Google מורשה לניהול" style={{ marginTop: 0 }} />
+      <SectionTitle title="מייל מנהל מורשה" style={{ marginTop: 0 }} />
       <div className="bb-card">
         {!editingEmail ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <ShieldCheck size={16} color="var(--gold)" />
             <span style={{ fontSize: 13, flex: 1, color: "var(--muted)" }}>
-              רק חשבון Google בכתובת <b style={{ color: "var(--cream)" }}>{adminEmail}</b> יכול להתחבר לפאנל הניהול.
+              בכניסת מנהל נשלח קוד אימות חד-פעמי אל <b style={{ color: "var(--cream)" }}>{adminEmail}</b>. רק מי שיש לו גישה לתיבה הזו יכול להיכנס.
             </span>
             <button className="bb-btn bb-btn-ghost bb-btn-sm" onClick={() => { setEmailInput(adminEmail); setEditingEmail(true); }}>שינוי</button>
           </div>
