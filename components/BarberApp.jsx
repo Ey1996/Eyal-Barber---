@@ -639,36 +639,20 @@ export default function BarberApp() {
     );
   }, []);
 
-  async function requestAdminAccess() {
-    // if a verified session for the admin email already exists, skip the code
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { data } = await supabase.auth.getSession();
-        const email = data?.session?.user?.email;
-        if (email && adminEmail && email.toLowerCase() === adminEmail.trim().toLowerCase()) {
-          setAdminUnlocked(true);
-          setView("admin");
-          logActivity(`מנהל נכנס (סשן מאומת קיים: ${email})`);
-          return;
-        }
-      } catch (e) { /* fall through to the gate */ }
-    }
+  function requestAdminAccess() {
     setGoogleSignInOpen(true);
   }
 
-  function handleGoogleSuccess(email) {
+  function handleGoogleSuccess() {
     setAdminUnlocked(true);
     setGoogleSignInOpen(false);
     setView("admin");
-    logActivity(`מנהל נכנס לאחר אימות קוד במייל (${email})`);
+    logActivity("מנהל נכנס עם קוד גישה");
   }
 
   function lockAdmin() {
     setAdminUnlocked(false);
     setView("landing");
-    if (isSupabaseConfigured && supabase) {
-      supabase.auth.signOut().catch(() => {});
-    }
   }
 
   const themeVars = THEMES[themeId]?.vars || THEMES.gold.vars;
@@ -739,10 +723,8 @@ export default function BarberApp() {
       )}
 
       {googleSignInOpen && (
-        <EmailOtpGate
-          adminEmail={adminEmail}
-          onSuccess={handleGoogleSuccess}
-          onClose={() => setGoogleSignInOpen(false)}
+        <PinGate onSuccess={handleGoogleSuccess} onClose={() => setGoogleSignInOpen(false)} />
+      )}
         />
       )}
 
@@ -783,162 +765,85 @@ function LandingScreen({ businessName, logo, onChooseClient, onChooseAdmin }) {
 }
 
 /* ============================================================================
-   ADMIN ACCESS — email verification gate.
-   The admin email is shown automatically; a 6-digit one-time code is sent to
-   that inbox (Supabase Auth OTP in the deployed build) and must be entered to
-   unlock the admin panel. Nobody without access to the inbox can get in.
-   In the in-chat prototype (no backend) this runs in a labeled demo mode.
+   ADMIN ACCESS — PIN gate.
+   The PIN itself is NOT stored anywhere in the code or database; only its
+   SHA-256 fingerprint is kept, and the entered value is hashed and compared.
    ============================================================================ */
-function EmailOtpGate({ adminEmail, onSuccess, onClose }) {
-  const [stage, setStage] = useState("start"); // start | code
-  const [code, setCode] = useState("");
-  const [sending, setSending] = useState(false);
-  const [verifying, setVerifying] = useState(false);
-  const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
-  const [demoCode, setDemoCode] = useState(null); // prototype fallback only
+const ADMIN_PIN_HASH = "e68adee72e4d3c421f15cc33523be1c38208e4489b91d5e426503d99c5a7d790";
 
-  async function sendCode() {
-    setSending(true);
-    setError("");
-    setInfo("");
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { error: err } = await supabase.auth.signInWithOtp({
-          email: adminEmail.trim(),
-          options: { shouldCreateUser: true },
-        });
-        setSending(false);
-        if (err) {
-          setError("שליחת הקוד נכשלה: " + err.message);
-          return;
-        }
-        setStage("code");
-        setInfo("קוד בן 6 ספרות נשלח אל " + adminEmail);
-      } catch (e) {
-        setSending(false);
-        setError("שגיאת רשת בשליחת הקוד — נסו שוב");
-      }
+async function sha256Hex(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function PinGate({ onSuccess, onClose }) {
+  const [entered, setEntered] = useState("");
+  const [shake, setShake] = useState(false);
+  const [checking, setChecking] = useState(false);
+
+  async function tryVerify(pin) {
+    setChecking(true);
+    let hex = "";
+    try { hex = await sha256Hex(pin); } catch (e) { /* non-secure context */ }
+    setChecking(false);
+    if (hex === ADMIN_PIN_HASH) {
+      vibrate(15);
+      onSuccess();
     } else {
-      // demo mode — no backend available to actually send email
-      const c = String(Math.floor(100000 + Math.random() * 900000));
-      setDemoCode(c);
-      setSending(false);
-      setStage("code");
+      vibrate([30, 40, 30]);
+      setShake(true);
+      setTimeout(() => { setShake(false); setEntered(""); }, 450);
     }
   }
 
-  async function verify(theCode) {
-    const token = (theCode ?? code).trim();
-    if (token.length !== 6) return;
-    setVerifying(true);
-    setError("");
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { data, error: err } = await supabase.auth.verifyOtp({
-          email: adminEmail.trim(),
-          token,
-          type: "email",
-        });
-        setVerifying(false);
-        if (err || !data?.session) {
-          setError("קוד שגוי או שפג תוקפו — נסו שוב");
-          setCode("");
-          return;
-        }
-        onSuccess(adminEmail);
-      } catch (e) {
-        setVerifying(false);
-        setError("שגיאת רשת באימות — נסו שוב");
-      }
-    } else {
-      setVerifying(false);
-      if (token === demoCode) onSuccess(adminEmail);
-      else {
-        setError("קוד שגוי — נסו שוב");
-        setCode("");
-      }
-    }
-  }
-
-  function onCodeChange(v) {
-    const clean = v.replace(/\D/g, "").slice(0, 6);
-    setCode(clean);
-    if (clean.length === 6) verify(clean);
+  function press(d) {
+    if (checking || entered.length >= 4) return;
+    const next = entered + d;
+    setEntered(next);
+    if (next.length === 4) tryVerify(next);
   }
 
   return (
     <div className="bb-modal-backdrop" style={{ alignItems: "center" }} onClick={onClose}>
-      <div className="bb-modal" style={{ borderRadius: 20, maxWidth: 360 }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
-            <div style={{ width: 52, height: 52, borderRadius: "50%", background: "var(--gold-wash)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <ShieldCheck size={24} color="var(--gold-bright)" />
-            </div>
+      <div
+        className="bb-modal"
+        style={{ borderRadius: 20, maxWidth: 340, textAlign: "center", animation: shake ? "bb-shake .45s" : undefined }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 6 }}>
+          <div style={{ width: 52, height: 52, borderRadius: "50%", background: "var(--gold-wash)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <ShieldCheck size={24} color="var(--gold-bright)" />
           </div>
-          <h3 className="bb-serif" style={{ fontSize: 17, marginBottom: 4 }}>כניסת מנהל</h3>
+        </div>
+        <h3 className="bb-serif" style={{ fontSize: 17, marginBottom: 4 }}>כניסת מנהל</h3>
+        <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 20 }}>הזינו את קוד הגישה</p>
 
-          {stage === "start" && (
-            <>
-              <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 16 }}>
-                קוד אימות חד-פעמי יישלח לכתובת המנהל הרשומה:
-              </p>
-              <div className="bb-card" style={{ padding: "12px 14px", marginBottom: 18, display: "flex", alignItems: "center", gap: 9, justifyContent: "center" }}>
-                <Lock size={14} color="var(--gold)" />
-                <span dir="ltr" style={{ fontSize: 14, fontWeight: 600 }}>{adminEmail}</span>
-              </div>
-              {error && (
-                <div style={{ fontSize: 12.5, color: "var(--danger)", marginBottom: 12 }}>{error}</div>
-              )}
-              <button className="bb-btn bb-btn-primary" style={{ width: "100%" }} disabled={sending} onClick={sendCode}>
-                {sending ? <><Loader2 size={16} style={{ animation: "spin 0.8s linear infinite" }} /> שולח קוד...</> : "שליחת קוד אימות למייל"}
-              </button>
-              <button className="bb-btn bb-btn-ghost" style={{ width: "100%", marginTop: 10, opacity: 0.75 }} onClick={onClose}>ביטול</button>
-            </>
-          )}
+        <div style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 24 }}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div
+              key={i}
+              style={{
+                width: 14, height: 14, borderRadius: "50%",
+                border: "1.5px solid var(--gold-dim)",
+                background: i < entered.length ? "var(--gold)" : "transparent",
+                transition: "background .12s",
+              }}
+            />
+          ))}
+        </div>
 
-          {stage === "code" && (
-            <>
-              <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 6 }}>
-                הזינו את הקוד בן 6 הספרות שנשלח אל
-              </p>
-              <p dir="ltr" style={{ fontSize: 13, fontWeight: 700, color: "var(--gold-bright)", marginBottom: 16 }}>{adminEmail}</p>
-
-              {!isSupabaseConfigured && demoCode && (
-                <div style={{ background: "var(--warning-wash)", border: "1px solid rgba(209,168,92,0.3)", borderRadius: 10, padding: "8px 10px", marginBottom: 14, fontSize: 11.5, color: "var(--warning)" }}>
-                  מצב הדגמה (ללא שרת מייל): הקוד הוא <b dir="ltr">{demoCode}</b>. בגרסה החיה הקוד מגיע למייל בלבד.
-                </div>
-              )}
-
-              <input
-                autoFocus
-                dir="ltr"
-                value={code}
-                onChange={(e) => onCodeChange(e.target.value)}
-                inputMode="numeric"
-                placeholder="• • • • • •"
-                style={{
-                  width: "100%", textAlign: "center", letterSpacing: 10,
-                  fontSize: 24, fontWeight: 700, fontFamily: "Heebo",
-                  background: "var(--bg-card)", color: "var(--cream)",
-                  border: error ? "1.5px solid var(--danger)" : "1.5px solid var(--border)",
-                  borderRadius: 12, padding: "13px 10px", marginBottom: 10,
-                }}
-              />
-              {error && <div style={{ fontSize: 12.5, color: "var(--danger)", marginBottom: 8 }}>{error}</div>}
-              {info && !error && <div style={{ fontSize: 11.5, color: "var(--muted-dim)", marginBottom: 8 }}>{info}</div>}
-
-              <button className="bb-btn bb-btn-primary" style={{ width: "100%" }} disabled={verifying || code.length !== 6} onClick={() => verify()}>
-                {verifying ? <><Loader2 size={16} style={{ animation: "spin 0.8s linear infinite" }} /> מאמת...</> : "אישור וכניסה"}
-              </button>
-              <button className="bb-btn bb-btn-ghost" style={{ width: "100%", marginTop: 10, fontSize: 13 }} disabled={sending} onClick={sendCode}>
-                {sending ? "שולח..." : "שליחת קוד חדש"}
-              </button>
-            </>
-          )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 8 }}>
+          {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
+            <button key={d} className="bb-btn bb-btn-ghost" style={{ fontSize: 18, padding: "14px 0" }} onClick={() => press(d)}>
+              {d}
+            </button>
+          ))}
+          <button className="bb-btn bb-btn-ghost" style={{ fontSize: 13, padding: "14px 0", opacity: 0.6 }} onClick={onClose}>ביטול</button>
+          <button className="bb-btn bb-btn-ghost" style={{ fontSize: 18, padding: "14px 0" }} onClick={() => press("0")}>0</button>
+          <button className="bb-btn bb-btn-ghost" style={{ fontSize: 13, padding: "14px 0" }} onClick={() => setEntered((e) => e.slice(0, -1))}>מחק</button>
         </div>
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`@keyframes bb-shake { 0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-8px); } 40%,80% { transform: translateX(8px); } }`}</style>
     </div>
   );
 }
@@ -3071,7 +2976,7 @@ function SettingsTab({ notificationLog, adminEmail, setAdminEmail, themeId, setT
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <ShieldCheck size={16} color="var(--gold)" />
             <span style={{ fontSize: 13, flex: 1, color: "var(--muted)" }}>
-              בכניסת מנהל נשלח קוד אימות חד-פעמי אל <b style={{ color: "var(--cream)" }}>{adminEmail}</b>. רק מי שיש לו גישה לתיבה הזו יכול להיכנס.
+              הכניסה לפאנל הניהול מוגנת בקוד גישה אישי (לא שמור בשום מקום). המייל <b style={{ color: "var(--cream)" }}>{adminEmail}</b> משמש לעדכונים עתידיים.
             </span>
             <button className="bb-btn bb-btn-ghost bb-btn-sm" onClick={() => { setEmailInput(adminEmail); setEditingEmail(true); }}>שינוי</button>
           </div>
