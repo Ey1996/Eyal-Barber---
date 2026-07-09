@@ -725,8 +725,6 @@ export default function BarberApp() {
       {googleSignInOpen && (
         <PinGate onSuccess={handleGoogleSuccess} onClose={() => setGoogleSignInOpen(false)} />
       )}
-        />
-      )}
 
       <ToastContainer toasts={toasts} onUndo={undoToast} onDismiss={dismissToast} />
     </div>
