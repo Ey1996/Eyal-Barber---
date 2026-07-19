@@ -17,11 +17,18 @@ import { supabase, isSupabaseConfigured } from "../lib/supabase";
    (names/phones). These helpers perform the few targeted writes/lookups a
    client needs, directly against the server. No-ops in the prototype. */
 async function remoteInsertRow(table, item) {
-  if (!(isSupabaseConfigured && supabase)) return true;
+  if (!(isSupabaseConfigured && supabase)) return { ok: true };
   try {
     const { error } = await supabase.from(table).upsert({ id: item.id, data: item });
-    return !error;
-  } catch (e) { return false; }
+    if (error) console.error(`save failed on ${table}:`, error);
+    // 23505 = unique violation -> the slot is already taken by another row
+    if (error && (error.code === "23505" || /duplicate|unique/i.test(error.message || ""))) {
+      return { ok: false, reason: "השעה הזו כבר תפוסה על ידי תור אחר" };
+    }
+    return error ? { ok: false, reason: error.message || "שגיאת שרת" } : { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e?.message || "אין חיבור לרשת" };
+  }
 }
 
 async function remoteSetAppointmentStatus(id, status) {
@@ -1714,8 +1721,8 @@ function DashboardTab({ appointments, clients, services, notificationLog, setApp
 
   function saveAppt(updated) {
     setAppointments((appts) => appts.map((a) => (a.id === updated.id ? updated : a)));
-    remoteInsertRow("appointments", updated).then((ok) => {
-      if (!ok) pushToast && pushToast("⚠️ השמירה לשרת נכשלה — בדקו חיבור ונסו שוב", { type: "danger", duration: 8000 });
+    remoteInsertRow("appointments", updated).then((res) => {
+      if (!res.ok) pushToast && pushToast(`⚠️ השמירה נכשלה: ${res.reason}`, { type: "danger", duration: 10000 });
     });
     logActivity(`התור של ${updated.clientName} עודכן ידנית`);
     pushToast && pushToast("התור עודכן בהצלחה", { type: "success" });
@@ -2087,8 +2094,8 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
 
   function saveAppt(updated) {
     setAppointments((appts) => appts.map((a) => (a.id === updated.id ? updated : a)));
-    remoteInsertRow("appointments", updated).then((ok) => {
-      if (!ok) pushToast && pushToast("⚠️ השמירה לשרת נכשלה — בדקו חיבור ונסו שוב", { type: "danger", duration: 8000 });
+    remoteInsertRow("appointments", updated).then((res) => {
+      if (!res.ok) pushToast && pushToast(`⚠️ השמירה נכשלה: ${res.reason}`, { type: "danger", duration: 10000 });
     });
     logActivity(`התור של ${updated.clientName} עודכן ידנית (עריכה מלאה)`);
     pushToast && pushToast("התור עודכן בהצלחה", { type: "success" });
@@ -2131,8 +2138,8 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
     const newAppt = { id: uid(), clientId, ...apptFields, createdAt: Date.now() };
     setAppointments((appts) => [...appts, newAppt]);
     // verified server write — loud failure instead of silent data loss
-    remoteInsertRow("appointments", newAppt).then((ok) => {
-      if (!ok) pushToast && pushToast("⚠️ השמירה לשרת נכשלה — בדקו חיבור ונסו שוב", { type: "danger", duration: 8000 });
+    remoteInsertRow("appointments", newAppt).then((res) => {
+      if (!res.ok) pushToast && pushToast(`⚠️ השמירה נכשלה: ${res.reason}`, { type: "danger", duration: 10000 });
     });
     logActivity(`תור נקבע ידנית עבור ${apptFields.clientName} · ${apptFields.date} ${apptFields.time}`);
     pushToast && pushToast("התור נקבע בהצלחה", { type: "success" });
