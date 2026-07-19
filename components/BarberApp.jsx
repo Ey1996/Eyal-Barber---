@@ -8,8 +8,38 @@ import {
   Wallet, Receipt, TrendingDown, Crown, BookOpen,
   Search, Download, CalendarDays, Timer, Image as ImageIcon, List
 } from "lucide-react";
+
 import { usePersistentList, useSetting } from "../lib/usePersistentState";
 import { supabase, isSupabaseConfigured } from "../lib/supabase";
+
+/* ---- privacy-aware server writes ----
+   In client mode the app deliberately does NOT load other people's data
+   (names/phones). These helpers perform the few targeted writes/lookups a
+   client needs, directly against the server. No-ops in the prototype. */
+async function remoteInsertRow(table, item) {
+  if (!(isSupabaseConfigured && supabase)) return true;
+  try {
+    const { error } = await supabase.from(table).upsert({ id: item.id, data: item });
+    return !error;
+  } catch (e) { return false; }
+}
+
+async function remoteSetAppointmentStatus(id, status) {
+  if (!(isSupabaseConfigured && supabase)) return true;
+  try {
+    const { data } = await supabase.from("appointments").select("data").eq("id", id).maybeSingle();
+    if (data?.data) await supabase.from("appointments").upsert({ id, data: { ...data.data, status } });
+    return true;
+  } catch (e) { return false; }
+}
+
+async function remoteFindClientByPhone(phone) {
+  if (!(isSupabaseConfigured && supabase) || !phone) return null;
+  try {
+    const { data } = await supabase.from("clients").select("data").eq("data->>phone", phone).maybeSingle();
+    return data?.data || null;
+  } catch (e) { return null; }
+}
 
 /* ============================================================================
    DESIGN TOKENS — Dark Luxury System
@@ -596,20 +626,25 @@ export default function BarberApp() {
   const [view, setView] = useState("landing"); // landing | client | admin
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [googleSignInOpen, setGoogleSignInOpen] = useState(false);
-  /* ---- persisted state: stored in Supabase, live-synced across devices ---- */
+  /* ---- persisted state, privacy-tiered ----
+     public (everyone): services, settings, and a SANITIZED slots view of
+     appointments — date/time/status only, never names or phones.
+     admin-only (loaded only after PIN unlock): clients, full appointments,
+     logs, expenses, journal, notifications. */
+  const APPT_PUBLIC_FIELDS = "id, date:data->>date, time:data->>time, status:data->>status, duration:data->>duration, serviceName:data->>serviceName, price:data->>price";
   const [adminEmail, setAdminEmail] = useSetting("admin_email", ADMIN_EMAIL_DEFAULT);
   const [themeId, setThemeId] = useSetting("theme", "gold");
   const [businessName, setBusinessName] = useSetting("business_name", "בארבר שופ | TEL AVIV");
-  const [logo, setLogo] = useSetting("logo", null); // data-URL of the uploaded business logo
+  const [logo, setLogo] = useSetting("logo", null);
   const [services, setServices] = usePersistentList("services", INITIAL_SERVICES);
-  const [clients, setClients] = usePersistentList("clients");
-  const [appointments, setAppointments] = usePersistentList("appointments");
+  const [clients, setClients] = usePersistentList("clients", [], { enabled: adminUnlocked });
+  const [appointments, setAppointments] = usePersistentList("appointments", [], adminUnlocked ? {} : { publicFields: APPT_PUBLIC_FIELDS });
   const [weeklyHours, setWeeklyHours] = useSetting("weekly_hours", INITIAL_HOURS);
-  const [activityLog, setActivityLog] = usePersistentList("activity_log");
-  const [notificationLog, setNotificationLog] = usePersistentList("notification_log");
-  const [expenses, setExpenses] = usePersistentList("expenses");
-  const [journalEntries, setJournalEntries] = usePersistentList("journal_entries"); // separate index: "יומן"
-  const [adminNotifications, setAdminNotifications] = usePersistentList("admin_notifications"); // approval-request feed
+  const [activityLog, setActivityLog] = usePersistentList("activity_log", [], { enabled: adminUnlocked });
+  const [notificationLog, setNotificationLog] = usePersistentList("notification_log", [], { enabled: adminUnlocked });
+  const [expenses, setExpenses] = usePersistentList("expenses", [], { enabled: adminUnlocked });
+  const [journalEntries, setJournalEntries] = usePersistentList("journal_entries", [], { enabled: adminUnlocked });
+  const [adminNotifications, setAdminNotifications] = usePersistentList("admin_notifications", [], { enabled: adminUnlocked });
   const [toasts, setToasts] = useState([]);
   const undoStash = useRef({});
 
@@ -629,14 +664,16 @@ export default function BarberApp() {
 
   /* ---------- activity log ---------- */
   const logActivity = useCallback((action) => {
-    setActivityLog((log) => [{ id: uid(), ts: Date.now(), action }, ...log].slice(0, 50));
+    const entry = { id: uid(), ts: Date.now(), action };
+    setActivityLog((log) => [entry, ...log].slice(0, 50));
+    remoteInsertRow("activity_log", entry);
   }, []);
 
   /* pushes an event into the admin's Facebook-style notification feed */
   const notifyAdmin = useCallback((type, payload = {}) => {
-    setAdminNotifications((ns) =>
-      [{ id: uid(), ts: Date.now(), type, read: false, handled: false, ...payload }, ...ns].slice(0, 100)
-    );
+    const notif = { id: uid(), ts: Date.now(), type, read: false, handled: false, ...payload };
+    setAdminNotifications((ns) => [notif, ...ns].slice(0, 100));
+    remoteInsertRow("admin_notifications", notif); // reaches the admin's device via realtime
   }, []);
 
   function requestAdminAccess() {
@@ -830,7 +867,7 @@ function PinGate({ onSuccess, onClose }) {
           ))}
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 8 }}>
+        <div dir="ltr" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 8 }}>
           {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
             <button key={d} className="bb-btn bb-btn-ghost" style={{ fontSize: 18, padding: "14px 0" }} onClick={() => press(d)}>
               {d}
@@ -926,8 +963,8 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
     setSubmitting(true);
     setConflict(null);
 
-    // simulate server round-trip
-    setTimeout(() => {
+    // server round-trip
+    setTimeout(async () => {
       const dateKey = fmtDateKey(selectedDate);
       // race-condition guard: re-check slot wasn't just taken by someone else
       const clash = appointments.some(
@@ -939,12 +976,14 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
         return;
       }
 
-      // without a phone number there's nothing reliable to match an existing
-      // client by, so a fresh (phone-less) client record is created each time
+      // match a returning client by phone: local list first (admin/prototype),
+      // otherwise a targeted server lookup — never by downloading everyone's data
       let client = phone ? clients.find((c) => c.phone === phone) : null;
+      if (!client && phone) client = await remoteFindClientByPhone(phone);
       if (!client) {
         client = { id: uid(), name, phone: phone || "", note: "", defaultDuration: DEFAULT_APPT_DURATION };
         setClients((cs) => [client, ...cs]);
+        remoteInsertRow("clients", client);
       }
 
       const appt = {
@@ -962,6 +1001,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
         createdAt: Date.now(),
       };
       setAppointments((a) => [...a, appt]);
+      remoteInsertRow("appointments", appt);
       logActivity(`התקבלה בקשת תור: ${name} · ${selectedService.name} · ${dateKey} ${selectedTime}`);
       notifyAdmin && notifyAdmin("new_booking", {
         apptId: appt.id,
@@ -984,10 +1024,9 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
         setWhatsappStatus("sending");
         setTimeout(() => {
           setWhatsappStatus("sent");
-          setNotificationLog((log) => [
-            { id: uid(), ts: Date.now(), type: "אישור הזמנה", recipient: phone, status: "sent" },
-            ...log,
-          ]);
+          const waEntry = { id: uid(), ts: Date.now(), type: "אישור הזמנה", recipient: phone, status: "sent" };
+          setNotificationLog((log) => [waEntry, ...log]);
+          remoteInsertRow("notification_log", waEntry);
         }, 1400);
       } else {
         setWhatsappStatus("no_phone");
@@ -1126,6 +1165,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
                   return (
                     <div
                       key={s}
+                      title={isBooked ? "תפוס" : undefined}
                       className={`bb-slot ${isPast ? "past" : ""} ${isBooked ? "booked" : ""} ${isRecommended ? "recommended" : ""} ${isSelected ? "selected" : ""}`}
                       onClick={() => !disabled && setSelectedTime(s)}
                     >
@@ -1281,7 +1321,8 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
               return;
             }
             setAppointments((appts) => appts.map((a) => (a.id === appt.id ? { ...a, status: "cancelled" } : a)));
-            logActivity(`לקוח ביטל תור: ${appt.clientName} · ${appt.date} ${appt.time}`);
+            remoteSetAppointmentStatus(appt.id, "cancelled");
+            logActivity(`לקוח ביטל תור: ${appt.clientName || "לקוח"} · ${appt.date} ${appt.time}`);
             notifyAdmin && notifyAdmin("client_cancelled", {
               apptId: appt.id,
               clientName: appt.clientName,
@@ -1403,6 +1444,7 @@ function AdminView(props) {
   /* one-tap approve / decline for a booking request */
   function decideAppointment(apptId, decision, notifId) {
     setAppointments((as) => as.map((a) => (a.id === apptId ? { ...a, status: decision } : a)));
+    remoteSetAppointmentStatus(apptId, decision);
     if (notifId) {
       setAdminNotifications((ns) => ns.map((n) => (n.id === notifId ? { ...n, handled: true, read: true } : n)));
     } else {
@@ -1634,6 +1676,7 @@ function DashboardTab({ appointments, clients, services, notificationLog, setApp
 
   function quickDecide(apptId, decision) {
     setAppointments((as) => as.map((a) => (a.id === apptId ? { ...a, status: decision } : a)));
+    remoteSetAppointmentStatus(apptId, decision);
     setAdminNotifications && setAdminNotifications((ns) => ns.map((n) => (n.apptId === apptId ? { ...n, handled: true, read: true } : n)));
     const appt = appointments.find((a) => a.id === apptId);
     logActivity(decision === "confirmed" ? `התור של ${appt?.clientName || ""} אושר` : `בקשת התור של ${appt?.clientName || ""} נדחתה`);
@@ -1671,6 +1714,9 @@ function DashboardTab({ appointments, clients, services, notificationLog, setApp
 
   function saveAppt(updated) {
     setAppointments((appts) => appts.map((a) => (a.id === updated.id ? updated : a)));
+    remoteInsertRow("appointments", updated).then((ok) => {
+      if (!ok) pushToast && pushToast("⚠️ השמירה לשרת נכשלה — בדקו חיבור ונסו שוב", { type: "danger", duration: 8000 });
+    });
     logActivity(`התור של ${updated.clientName} עודכן ידנית`);
     pushToast && pushToast("התור עודכן בהצלחה", { type: "success" });
     setEditingAppt(null);
@@ -2034,12 +2080,16 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
 
   function updateStatus(id, status) {
     setAppointments((appts) => appts.map((a) => (a.id === id ? { ...a, status } : a)));
+    remoteSetAppointmentStatus(id, status);
     const a = appointments.find((x) => x.id === id);
     logActivity(`סטטוס התור של ${a?.clientName} עודכן ל"${status}"`);
   }
 
   function saveAppt(updated) {
     setAppointments((appts) => appts.map((a) => (a.id === updated.id ? updated : a)));
+    remoteInsertRow("appointments", updated).then((ok) => {
+      if (!ok) pushToast && pushToast("⚠️ השמירה לשרת נכשלה — בדקו חיבור ונסו שוב", { type: "danger", duration: 8000 });
+    });
     logActivity(`התור של ${updated.clientName} עודכן ידנית (עריכה מלאה)`);
     pushToast && pushToast("התור עודכן בהצלחה", { type: "success" });
     setEditingAppt(null);
@@ -2070,8 +2120,20 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
       ]);
     }
 
+    const clash = appointments.some(
+      (a) => a.date === apptFields.date && a.time === apptFields.time && a.status !== "cancelled"
+    );
+    if (clash) {
+      pushToast && pushToast("קיים כבר תור בשעה הזו — בחרו שעה אחרת", { type: "danger" });
+      return;
+    }
+
     const newAppt = { id: uid(), clientId, ...apptFields, createdAt: Date.now() };
     setAppointments((appts) => [...appts, newAppt]);
+    // verified server write — loud failure instead of silent data loss
+    remoteInsertRow("appointments", newAppt).then((ok) => {
+      if (!ok) pushToast && pushToast("⚠️ השמירה לשרת נכשלה — בדקו חיבור ונסו שוב", { type: "danger", duration: 8000 });
+    });
     logActivity(`תור נקבע ידנית עבור ${apptFields.clientName} · ${apptFields.date} ${apptFields.time}`);
     pushToast && pushToast("התור נקבע בהצלחה", { type: "success" });
     setCreatingAppt(false);
