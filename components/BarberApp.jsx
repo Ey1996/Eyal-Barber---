@@ -226,6 +226,17 @@ function fmtDateKey(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// default date for a new admin-created appointment:
+// Sat/Sun/Mon -> upcoming Tuesday; Tue/Wed/Thu/Fri -> upcoming Friday
+function defaultWorkDate() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay(); // 0=Sun ... 5=Fri, 6=Sat
+  const target = day === 6 || day === 0 || day === 1 ? 2 : 5;
+  d.setDate(d.getDate() + ((target - day + 7) % 7));
+  return d;
+}
+
 function nextNDays(n) {
   const out = [];
   const today = new Date();
@@ -1725,7 +1736,6 @@ function DashboardTab({ appointments, clients, services, notificationLog, setApp
       if (!res.ok) pushToast && pushToast(`⚠️ השמירה נכשלה: ${res.reason}`, { type: "danger", duration: 10000 });
     });
     logActivity(`התור של ${updated.clientName} עודכן ידנית`);
-    pushToast && pushToast("התור עודכן בהצלחה", { type: "success" });
     setEditingAppt(null);
   }
 
@@ -2098,7 +2108,6 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
       if (!res.ok) pushToast && pushToast(`⚠️ השמירה נכשלה: ${res.reason}`, { type: "danger", duration: 10000 });
     });
     logActivity(`התור של ${updated.clientName} עודכן ידנית (עריכה מלאה)`);
-    pushToast && pushToast("התור עודכן בהצלחה", { type: "success" });
     setEditingAppt(null);
   }
 
@@ -2142,7 +2151,6 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
       if (!res.ok) pushToast && pushToast(`⚠️ השמירה נכשלה: ${res.reason}`, { type: "danger", duration: 10000 });
     });
     logActivity(`תור נקבע ידנית עבור ${apptFields.clientName} · ${apptFields.date} ${apptFields.time}`);
-    pushToast && pushToast("התור נקבע בהצלחה", { type: "success" });
     setCreatingAppt(false);
   }
 
@@ -2355,13 +2363,28 @@ function EditAppointmentModal({ appt, services, clients = [], onSave, onClose })
     clientName: appt?.clientName || "",
     phone: appt?.phone || "",
     serviceId: appt?.serviceId || services[0]?.id || "",
-    date: appt?.date || fmtDateKey(new Date()),
+    date: appt?.date || fmtDateKey(defaultWorkDate()),
     time: appt?.time || "10:00",
     duration: appt?.duration ?? DEFAULT_APPT_DURATION,
     price: appt?.price ?? (services[0]?.price ?? 0),
     status: appt?.status || "confirmed",
   });
   const [errors, setErrors] = useState({});
+  const [showSuggest, setShowSuggest] = useState(false);
+
+  // autocomplete: clients whose first name (or any later word) starts with what was typed
+  const nameQuery = form.clientName.trim();
+  const nameSuggestions = isCreate && nameQuery
+    ? clients
+        .map((c) => {
+          const n = (c.name || "").trim();
+          const rank = n.startsWith(nameQuery) ? 0 : n.split(/\s+/).some((w) => w.startsWith(nameQuery)) ? 1 : -1;
+          return { c, rank };
+        })
+        .filter((x) => x.rank >= 0 && x.c.name.trim() !== nameQuery)
+        .sort((a, b) => a.rank - b.rank || a.c.name.localeCompare(b.c.name, "he"))
+        .map((x) => x.c)
+    : [];
 
   function pickExistingClient(id) {
     setSelectedClientId(id);
@@ -2405,7 +2428,31 @@ function EditAppointmentModal({ appt, services, clients = [], onSave, onClose })
       )}
       <div className={`bb-field ${errors.clientName ? "error" : ""}`}>
         <label>שם הלקוח</label>
-        <input value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })} />
+        <input
+          value={form.clientName}
+          autoComplete="off"
+          onChange={(e) => {
+            setForm({ ...form, clientName: e.target.value });
+            if (isCreate) { setSelectedClientId(""); setShowSuggest(true); }
+          }}
+          onFocus={() => isCreate && setShowSuggest(true)}
+          onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+        />
+        {showSuggest && nameSuggestions.length > 0 && (
+          <div style={{ marginTop: 6, background: "var(--bg-card)", border: "1.5px solid var(--border)", borderRadius: 10, maxHeight: 220, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
+            <div style={{ fontSize: 11, color: "var(--muted)", padding: "6px 12px 2px" }}>{nameSuggestions.length} לקוחות נמצאו</div>
+            {nameSuggestions.map((c) => (
+              <div
+                key={c.id}
+                onMouseDown={(e) => { e.preventDefault(); pickExistingClient(c.id); setShowSuggest(false); }}
+                style={{ padding: "10px 12px", cursor: "pointer", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "space-between", gap: 8 }}
+              >
+                <span style={{ fontWeight: 700, color: "var(--cream)" }}>{c.name}</span>
+                {c.phone && <span style={{ fontSize: 12, color: "var(--muted)", direction: "ltr" }}>{c.phone}</span>}
+              </div>
+            ))}
+          </div>
+        )}
         <FieldError msg={errors.clientName} />
       </div>
       <div className={`bb-field ${errors.phone ? "error" : ""}`}>
