@@ -6,7 +6,8 @@ import {
   TrendingUp, Server, DatabaseBackup, Loader2, ChevronDown, Link as LinkIcon,
   CircleDollarSign, CalendarClock, History, StickyNote, Lock,
   Wallet, Receipt, TrendingDown, Crown, BookOpen,
-  Search, Download, CalendarDays, Timer, Image as ImageIcon, List
+  Search, Download, CalendarDays, Timer, Image as ImageIcon, List,
+  CheckCheck, Zap, ScanFace, Banknote, Undo2
 } from "lucide-react";
 
 import { usePersistentList, useSetting } from "../lib/usePersistentState";
@@ -40,6 +41,23 @@ async function remoteSetAppointmentStatus(id, status) {
   } catch (e) { return false; }
 }
 
+/* Secure server functions (supabase/security-step1.sql).
+   Returns { missing: true } when the function isn't installed yet, so the app
+   can fall back to the old direct writes until the SQL step has been run. */
+async function remoteRpc(fn, args) {
+  if (!(isSupabaseConfigured && supabase)) return { missing: true };
+  try {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (error) {
+      const notInstalled = error.code === "PGRST202" || error.code === "42883" || /could not find the function|does not exist/i.test(error.message || "");
+      return notInstalled ? { missing: true } : { ok: false, reason: error.message || "שגיאת שרת" };
+    }
+    return data || { ok: false, reason: "שגיאת שרת" };
+  } catch (e) {
+    return { ok: false, reason: e?.message || "אין חיבור לרשת" };
+  }
+}
+
 async function remoteFindClientByPhone(phone) {
   if (!(isSupabaseConfigured && supabase) || !phone) return null;
   try {
@@ -67,13 +85,19 @@ const CSS = `
   --gold-wash: rgba(198, 161, 91, 0.1);
   --cream: #F3EDE1;
   --muted: #A69C8D;
-  --muted-dim: #6E6559;
+  --muted-dim: #8C8274;
+  --on-gold: #1a1509;
+  --topbar-bg: rgba(11,10,13,0.92);
+  --r-sm: 10px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --tap: 40px;
   --success: #6FAE8B;
   --success-wash: rgba(111, 174, 139, 0.12);
   --danger: #C4695A;
   --danger-wash: rgba(196, 105, 90, 0.12);
-  --warning: #D1A85C;
-  --warning-wash: rgba(209, 168, 92, 0.12);
+  --warning: #E08F4A;
+  --warning-wash: rgba(224, 143, 74, 0.13);
 
   font-family: 'Heebo', sans-serif;
   background: var(--bg);
@@ -90,30 +114,30 @@ const CSS = `
 .bb-app { max-width: 480px; margin: 0 auto; min-height: 100vh; background: var(--bg); position: relative; display: flex; flex-direction: column; }
 .bb-admin-app { max-width: 900px; margin: 0 auto; min-height: 100vh; background: var(--bg); }
 .bb-scroll { flex: 1; overflow-y: auto; padding-bottom: 96px; }
-.bb-topbar { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: rgba(11,10,13,0.92); backdrop-filter: blur(10px); z-index: 30; }
-.bb-view-toggle { display: flex; gap: 6px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 3px; }
-.bb-view-toggle button { border: none; background: transparent; color: var(--muted); font-family: 'Heebo'; font-size: 13px; padding: 6px 12px; border-radius: 8px; cursor: pointer; transition: all .15s; }
-.bb-view-toggle button.active { background: var(--gold); color: #1a1509; font-weight: 600; }
+.bb-topbar { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--topbar-bg); backdrop-filter: blur(10px); z-index: 30; }
+.bb-view-toggle { display: flex; gap: 4px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md); padding: 4px; }
+.bb-view-toggle button { border: none; background: transparent; color: var(--muted); font-family: 'Heebo'; font-size: 13.5px; padding: 8px 14px; min-height: 36px; border-radius: var(--r-sm); cursor: pointer; transition: all .15s; }
+.bb-view-toggle button.active { background: var(--gold); color: var(--on-gold); font-weight: 600; }
 
 /* ---------- buttons ---------- */
-.bb-btn { font-family: 'Heebo'; font-weight: 600; font-size: 15px; border-radius: 12px; padding: 14px 20px; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: transform .12s, opacity .12s, background .15s; }
+.bb-btn { font-family: 'Heebo'; font-weight: 600; font-size: 15px; border-radius: var(--r-md); min-height: 44px; padding: 14px 20px; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: transform .12s, opacity .12s, background .15s; }
 .bb-btn:active { transform: scale(0.97); }
 .bb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.bb-btn-primary { background: linear-gradient(135deg, var(--gold-bright), var(--gold)); color: #1a1509; }
+.bb-btn-primary { background: linear-gradient(135deg, var(--gold-bright), var(--gold)); color: var(--on-gold); }
 .bb-btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .bb-btn-ghost { background: var(--bg-card); color: var(--cream); border: 1px solid var(--border-light); }
 .bb-btn-ghost:hover { background: var(--bg-hover); }
 .bb-btn-danger { background: var(--danger-wash); color: var(--danger); border: 1px solid rgba(196,105,90,0.3); }
-.bb-btn-sm { padding: 8px 14px; font-size: 13px; border-radius: 9px; }
-.bb-icon-btn { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 6px; border-radius: 8px; display: flex; align-items: center; justify-content: center; transition: all .15s; }
+.bb-btn-sm { padding: 8px 14px; font-size: 13.5px; border-radius: var(--r-sm); min-height: var(--tap); }
+.bb-icon-btn { background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 6px; border-radius: var(--r-sm); min-width: var(--tap); min-height: var(--tap); display: flex; align-items: center; justify-content: center; transition: all .15s; }
 .bb-icon-btn:hover { background: var(--bg-hover); color: var(--cream); }
 
 /* ---------- sticky CTA bar (mobile booking flow) ---------- */
 .bb-sticky-cta { position: sticky; bottom: 0; left: 0; right: 0; padding: 14px 20px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--bg) 60%, transparent); border-top: 1px solid var(--border); backdrop-filter: blur(8px); z-index: 20; }
 
 /* ---------- cards & lists ---------- */
-.bb-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
-.bb-service-card { background: var(--bg-card); border: 1.5px solid var(--border); border-radius: 14px; padding: 16px; cursor: pointer; transition: all .15s; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bb-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 16px; }
+.bb-service-card { background: var(--bg-card); border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 16px; cursor: pointer; transition: all .15s; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .bb-service-card:hover { border-color: var(--border-light); }
 .bb-service-card.selected { border-color: var(--gold); background: var(--gold-wash); }
 
@@ -129,26 +153,26 @@ const CSS = `
 
 /* ---------- time slot grid ---------- */
 .bb-slot-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.bb-slot { border-radius: 10px; padding: 11px 6px; text-align: center; font-size: 14px; font-weight: 500; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--cream); cursor: pointer; position: relative; transition: all .15s; }
+.bb-slot { border-radius: var(--r-md); padding: 12px 6px; text-align: center; font-size: 14px; font-weight: 500; border: 1.5px solid var(--border); background: var(--bg-card); color: var(--cream); cursor: pointer; position: relative; transition: all .15s; }
 .bb-slot.past { color: var(--muted-dim); text-decoration: line-through; cursor: not-allowed; opacity: 0.4; border-color: var(--border); }
 .bb-slot.booked { color: var(--muted-dim); text-decoration: line-through; cursor: not-allowed; background: transparent; border-style: dashed; }
 .bb-slot.recommended { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
-.bb-slot.recommended::after { content: 'הכי קרוב'; position: absolute; top: -9px; right: 50%; transform: translateX(50%); background: var(--gold); color: #1a1509; font-size: 9px; padding: 2px 6px; border-radius: 6px; font-weight: 700; white-space: nowrap; }
-.bb-slot.selected { background: var(--gold); border-color: var(--gold); color: #1a1509; font-weight: 700; }
+.bb-slot.recommended::after { content: 'הכי קרוב'; position: absolute; top: -9px; right: 50%; transform: translateX(50%); background: var(--gold); color: var(--on-gold); font-size: 9px; padding: 2px 6px; border-radius: 6px; font-weight: 700; white-space: nowrap; }
+.bb-slot.selected { background: var(--gold); border-color: var(--gold); color: var(--on-gold); font-weight: 700; }
 
 /* ---------- date strip ---------- */
 .bb-date-strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 12px; scrollbar-width: none; }
 .bb-date-strip::-webkit-scrollbar { display: none; }
-.bb-date-chip { min-width: 58px; flex-shrink: 0; text-align: center; padding: 10px 4px; border-radius: 12px; border: 1.5px solid var(--border); background: var(--bg-card); cursor: pointer; transition: all .15s; }
-.bb-date-chip .dow { font-size: 11px; color: var(--muted); }
+.bb-date-chip { min-width: 58px; flex-shrink: 0; text-align: center; padding: 10px 4px; border-radius: var(--r-md); border: 1.5px solid var(--border); background: var(--bg-card); cursor: pointer; transition: all .15s; }
+.bb-date-chip .dow { font-size: 12px; color: var(--muted); }
 .bb-date-chip .dnum { font-family: 'Frank Ruhl Libre'; font-size: 18px; font-weight: 700; margin-top: 2px; }
 .bb-date-chip.selected { background: var(--gold); border-color: var(--gold); }
-.bb-date-chip.selected .dow, .bb-date-chip.selected .dnum { color: #1a1509; }
+.bb-date-chip.selected .dow, .bb-date-chip.selected .dnum { color: var(--on-gold); }
 
 /* ---------- form fields ---------- */
 .bb-field { margin-bottom: 16px; }
-.bb-field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-.bb-field input, .bb-field textarea { width: 100%; background: var(--bg-card); border: 1.5px solid var(--border); border-radius: 10px; padding: 12px 14px; color: var(--cream); font-family: 'Heebo'; font-size: 15px; transition: border-color .15s; }
+.bb-field label { display: block; font-size: 13.5px; color: var(--muted); margin-bottom: 6px; }
+.bb-field input, .bb-field textarea { width: 100%; background: var(--bg-card); border: 1.5px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; color: var(--cream); font-family: 'Heebo'; font-size: 16px; transition: border-color .15s; }
 .bb-field input:focus, .bb-field textarea:focus { outline: none; border-color: var(--gold); }
 .bb-field.error input { border-color: var(--danger); }
 .bb-field .err-msg { color: var(--danger); font-size: 12px; margin-top: 5px; display: flex; align-items: center; gap: 4px; }
@@ -157,7 +181,7 @@ const CSS = `
 /* ---------- toasts ---------- */
 .bb-toast-wrap { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 100; display: flex; flex-direction: column; gap: 8px; width: calc(100% - 40px); max-width: 440px; }
 @keyframes bb-toast-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-.bb-toast { animation: bb-toast-in .25s ease; background: #232028; border: 1px solid var(--border-light); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+.bb-toast { animation: bb-toast-in .25s ease; background: var(--bg-elevated); border: 1px solid var(--border-light); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
 .bb-toast.success { border-color: rgba(111,174,139,0.35); }
 .bb-toast.danger { border-color: rgba(196,105,90,0.35); }
 .bb-toast span.msg { font-size: 13.5px; }
@@ -173,26 +197,49 @@ const CSS = `
 /* ---------- admin nav ---------- */
 .bb-admin-tabs { display: flex; gap: 4px; padding: 10px 16px; overflow-x: auto; border-bottom: 1px solid var(--border); scrollbar-width: none; position: sticky; top: 0; background: var(--bg); z-index: 20; }
 .bb-admin-tabs::-webkit-scrollbar { display: none; }
-.bb-admin-tab { display: flex; align-items: center; gap: 6px; padding: 9px 14px; border-radius: 10px; background: transparent; border: none; color: var(--muted); font-family: 'Heebo'; font-size: 13.5px; cursor: pointer; white-space: nowrap; transition: all .15s; }
+.bb-admin-tab { display: flex; align-items: center; gap: 6px; padding: 8px 14px; min-height: var(--tap); border-radius: var(--r-sm); background: transparent; border: none; color: var(--muted); font-family: 'Heebo'; font-size: 14.5px; cursor: pointer; white-space: nowrap; transition: all .15s; }
 .bb-admin-tab.active { background: var(--gold-wash); color: var(--gold-bright); font-weight: 600; }
+.bb-tab-count { background: var(--warning); color: var(--on-gold); border-radius: 10px; font-size: 11.5px; font-weight: 800; min-width: 20px; height: 20px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; }
+.bb-pay-row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); min-height: 68px; }
+.bb-pay-row:last-child { border-bottom: none; }
+.bb-pay-amount { display: flex; align-items: center; gap: 2px; background: var(--bg-elevated); border: 1.5px solid var(--border); border-radius: var(--r-sm); padding: 0 8px; height: 44px; }
+.bb-pay-amount:focus-within { border-color: var(--gold); }
+.bb-pay-amount input { width: 56px; background: transparent; border: none; outline: none; color: var(--cream); font-family: 'Heebo'; font-size: 17px; font-weight: 700; text-align: center; direction: ltr; }
+.bb-pay-v { width: 48px; height: 44px; border-radius: var(--r-sm); border: none; background: var(--success); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: transform .1s; }
+.bb-pay-v:active { transform: scale(0.92); }
 .bb-admin-tab:hover:not(.active) { background: var(--bg-card); color: var(--cream); }
 
 /* ---------- dashboard summary cards ---------- */
-.bb-summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 16px; }
-.bb-summary-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 12px; }
-.bb-summary-card .label { font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+.bb-summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 16px; }
+.bb-summary-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 16px 12px; }
+.bb-summary-card .label { font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
 .bb-summary-card .value { font-family: 'Frank Ruhl Libre'; font-size: 22px; font-weight: 700; color: var(--gold-bright); }
 
 /* ---------- generic table-ish rows ---------- */
-.bb-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); gap: 10px; }
+.bb-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); gap: 12px; min-height: 64px; }
+@media (max-width: 440px) {
+  .bb-row[class*="st-"] { gap: 8px; padding: 12px 12px 12px 8px; }
+  .bb-row[class*="st-"] .bb-avatar { display: none; }
+  .bb-row[class*="st-"] .bb-icon-btn { min-width: 36px; }
+}
+.bb-row.st-confirmed { box-shadow: inset -3px 0 0 var(--success); }
+.bb-row.st-pending { box-shadow: inset -3px 0 0 var(--warning); }
+.bb-row.st-done { box-shadow: inset -3px 0 0 var(--gold); }
+.bb-row.st-cancelled { box-shadow: inset -3px 0 0 var(--danger); opacity: 0.6; }
+.bb-status-select { background: var(--bg-card); border: 1.5px solid var(--border); border-radius: var(--r-sm); color: var(--cream); font-family: 'Heebo'; font-size: 13px; font-weight: 600; padding: 8px 10px; min-height: var(--tap); }
+.bb-status-select.st-confirmed { color: var(--success); border-color: var(--success-wash); background: var(--success-wash); }
+.bb-status-select.st-pending { color: var(--warning); border-color: var(--warning-wash); background: var(--warning-wash); }
+.bb-status-select.st-done { color: var(--gold-bright); border-color: var(--gold-wash); background: var(--gold-wash); }
+.bb-status-select.st-cancelled { color: var(--danger); border-color: var(--danger-wash); background: var(--danger-wash); }
 .bb-row:last-child { border-bottom: none; }
 .bb-avatar { width: 38px; height: 38px; border-radius: 50%; background: var(--gold-wash); color: var(--gold-bright); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
 
-.bb-badge { font-size: 11px; padding: 3px 9px; border-radius: 20px; font-weight: 600; }
+.bb-badge { font-size: 12px; padding: 4px 10px; border-radius: 20px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+.bb-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .bb-badge.confirmed { background: var(--success-wash); color: var(--success); }
 .bb-badge.pending { background: var(--warning-wash); color: var(--warning); }
 .bb-badge.cancelled { background: var(--danger-wash); color: var(--danger); }
-.bb-badge.done { background: var(--bg-hover); color: var(--muted); }
+.bb-badge.done { background: var(--gold-wash); color: var(--gold-bright); }
 .bb-badge.sent { background: var(--success-wash); color: var(--success); }
 .bb-badge.failed { background: var(--danger-wash); color: var(--danger); }
 .bb-badge.retrying { background: var(--warning-wash); color: var(--warning); }
@@ -207,6 +254,8 @@ const CSS = `
 @keyframes bb-modal-up { from { transform: translateY(30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
 .bb-rtl-flip { transform: scaleX(-1); }
+.bb-root :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.bb-root button:focus:not(:focus-visible) { outline: none; }
 .bb-mono-num { font-variant-numeric: tabular-nums; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -249,6 +298,8 @@ function nextNDays(n) {
   return out;
 }
 
+const SLOT_MINUTES = 20; // booking grid for clients — every 20 minutes
+
 function genSlots(openStr, closeStr) {
   if (!openStr || !closeStr) return [];
   const [oh, om] = openStr.split(":").map(Number);
@@ -260,7 +311,7 @@ function genSlots(openStr, closeStr) {
     const h = Math.floor(cur / 60);
     const m = cur % 60;
     slots.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
-    cur += 30;
+    cur += SLOT_MINUTES;
   }
   return slots;
 }
@@ -426,14 +477,14 @@ function Time24Input({ value, onChange }) {
         <select value={h || "00"} onChange={(e) => onChange(`${e.target.value}:${m || "00"}`)} style={timeSelectStyle}>
           {TIME24_HOURS.map((hh) => <option key={hh} value={hh}>{hh}</option>)}
         </select>
-        <span style={{ fontSize: 9.5, color: "var(--muted-dim)" }}>שעות</span>
+        <span style={{ fontSize: 12, color: "var(--muted-dim)" }}>שעות</span>
       </div>
       <span style={{ color: "var(--muted)", marginBottom: 14 }}>:</span>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
         <select value={m || "00"} onChange={(e) => onChange(`${h || "00"}:${e.target.value}`)} style={timeSelectStyle}>
           {TIME24_MINUTES.map((mm) => <option key={mm} value={mm}>{mm}</option>)}
         </select>
-        <span style={{ fontSize: 9.5, color: "var(--muted-dim)" }}>דקות</span>
+        <span style={{ fontSize: 12, color: "var(--muted-dim)" }}>דקות</span>
       </div>
     </div>
   );
@@ -589,6 +640,21 @@ const THEMES = {
       "--gold-wash": "rgba(123, 152, 196, 0.12)", "--cream": "#E9EDF2",
     },
   },
+  marble: {
+    label: "שיש ופליז (בהיר)",
+    swatch: "linear-gradient(135deg, #F4F0E8 50%, #9A7330 50%)",
+    vars: {
+      "--bg": "#F4F0E8", "--bg-elevated": "#FBF9F4", "--bg-card": "#FFFFFF", "--bg-hover": "#EFE9DE",
+      "--border": "#E2DACB", "--border-light": "#D3C8B4",
+      "--gold": "#9A7330", "--gold-bright": "#7A5A1C", "--gold-dim": "#C2A56B",
+      "--gold-wash": "rgba(154, 115, 48, 0.1)", "--cream": "#1E1A14",
+      "--muted": "#635A4D", "--muted-dim": "#7A7062",
+      "--success": "#2E7A52", "--success-wash": "rgba(46, 122, 82, 0.1)",
+      "--danger": "#B0463A", "--danger-wash": "rgba(176, 70, 58, 0.09)",
+      "--warning": "#A85A14", "--warning-wash": "rgba(168, 90, 20, 0.1)",
+      "--on-gold": "#FFFFFF", "--topbar-bg": "rgba(244, 240, 232, 0.92)",
+    },
+  },
   copper: {
     label: "נחושת ופחם",
     swatch: "#C87F51",
@@ -628,7 +694,7 @@ class ErrorBoundary extends React.Component {
           </p>
           <button
             onClick={() => this.setState({ hasError: false })}
-            style={{ marginTop: 8, background: "linear-gradient(135deg, #E3C480, #C6A15B)", color: "#1a1509", border: "none", borderRadius: 12, padding: "13px 28px", fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "Heebo" }}
+            style={{ marginTop: 8, background: "linear-gradient(135deg, #E3C480, #C6A15B)", color: "var(--on-gold)", border: "none", borderRadius: 12, padding: "13px 28px", fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "Heebo" }}
           >
             נסו שוב
           </button>
@@ -656,7 +722,11 @@ export default function BarberApp() {
   const [logo, setLogo] = useSetting("logo", null);
   const [services, setServices] = usePersistentList("services", INITIAL_SERVICES);
   const [clients, setClients] = usePersistentList("clients", [], { enabled: adminUnlocked });
-  const [appointments, setAppointments] = usePersistentList("appointments", [], adminUnlocked ? {} : { publicFields: APPT_PUBLIC_FIELDS });
+  const [appointments, setAppointments] = usePersistentList("appointments", [], adminUnlocked ? {} : {
+    publicFields: "id,date,time,status,duration,serviceName,price",
+    source: "appointment_slots",           // secure view: no names / phones
+    fallbackFields: APPT_PUBLIC_FIELDS,    // until security-step1.sql is run
+  });
   const [weeklyHours, setWeeklyHours] = useSetting("weekly_hours", INITIAL_HOURS);
   const [activityLog, setActivityLog] = usePersistentList("activity_log", [], { enabled: adminUnlocked });
   const [notificationLog, setNotificationLog] = usePersistentList("notification_log", [], { enabled: adminUnlocked });
@@ -681,31 +751,55 @@ export default function BarberApp() {
   }, [dismissToast]);
 
   /* ---------- activity log ---------- */
-  const logActivity = useCallback((action) => {
+  const adminRef = useRef(false);
+  const logActivity = useCallback((action, opts = {}) => {
     const entry = { id: uid(), ts: Date.now(), action };
     setActivityLog((log) => [entry, ...log].slice(0, 50));
-    remoteInsertRow("activity_log", entry);
+    if (adminRef.current || opts.forceRemote) remoteInsertRow("activity_log", entry);
   }, []);
 
   /* pushes an event into the admin's Facebook-style notification feed */
-  const notifyAdmin = useCallback((type, payload = {}) => {
+  const notifyAdmin = useCallback((type, payload = {}, opts = {}) => {
     const notif = { id: uid(), ts: Date.now(), type, read: false, handled: false, ...payload };
     setAdminNotifications((ns) => [notif, ...ns].slice(0, 100));
-    remoteInsertRow("admin_notifications", notif); // reaches the admin's device via realtime
+    if (adminRef.current || opts.forceRemote) remoteInsertRow("admin_notifications", notif); // reaches the admin's device via realtime
   }, []);
 
   function requestAdminAccess() {
     setGoogleSignInOpen(true);
   }
 
-  function handleGoogleSuccess() {
+  const [serverLoginOpen, setServerLoginOpen] = useState(false);
+
+  function finishAdminUnlock() {
+    adminRef.current = true;
     setAdminUnlocked(true);
     setGoogleSignInOpen(false);
+    setServerLoginOpen(false);
     setView("admin");
-    logActivity("מנהל נכנס עם קוד גישה");
+    logActivity("מנהל נכנס");
+  }
+
+  // after the PIN / Face ID: make sure there is a real server session
+  // (stays saved on this phone, so the password is needed only once)
+  async function handleGoogleSuccess() {
+    if (!(isSupabaseConfigured && supabase)) { finishAdminUnlock(); return; }
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session) { finishAdminUnlock(); return; }
+      // security SQL not installed yet -> keep the old PIN-only entry working
+      const { error } = await supabase.rpc("is_admin");
+      if (error && (error.code === "PGRST202" || error.code === "42883" || /could not find the function|does not exist/i.test(error.message || ""))) {
+        finishAdminUnlock();
+        return;
+      }
+    } catch (e) { /* fall through to login */ }
+    setGoogleSignInOpen(false);
+    setServerLoginOpen(true);
   }
 
   function lockAdmin() {
+    adminRef.current = false;
     setAdminUnlocked(false);
     setView("landing");
   }
@@ -780,6 +874,9 @@ export default function BarberApp() {
       {googleSignInOpen && (
         <PinGate onSuccess={handleGoogleSuccess} onClose={() => setGoogleSignInOpen(false)} />
       )}
+      {serverLoginOpen && (
+        <AdminServerLogin defaultEmail={adminEmail} onSuccess={finishAdminUnlock} onClose={() => setServerLoginOpen(false)} />
+      )}
 
       <ToastContainer toasts={toasts} onUndo={undoToast} onDismiss={dismissToast} />
     </div>
@@ -829,10 +926,159 @@ async function sha256Hex(str) {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/* ---------- Face ID / fingerprint unlock (WebAuthn passkey on this device) ----------
+   Uses the phone's own biometric check (Face ID on iPhone, fingerprint/face on Android).
+   Nothing biometric ever leaves the phone; we only keep the passkey's id on this device.
+   The 4-digit code always keeps working as the fallback. */
+const BIO_KEY = "bb_admin_passkey_id";
+
+function b64urlFromBuf(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function bufFromB64url(str) {
+  const b64 = str.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((str.length + 3) % 4);
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+function getSavedPasskey() {
+  try { return window.localStorage.getItem(BIO_KEY); } catch (e) { return null; }
+}
+async function biometricSupported() {
+  try {
+    return !!(window.PublicKeyCredential && window.isSecureContext &&
+      (await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()));
+  } catch (e) { return false; }
+}
+async function registerBiometric() {
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: "Barber Admin", id: window.location.hostname },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "admin", displayName: "מנהל המספרה" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required", residentKey: "preferred" },
+      timeout: 60000,
+    },
+  });
+  if (!cred) throw new Error("no credential");
+  try { window.localStorage.setItem(BIO_KEY, b64urlFromBuf(cred.rawId)); } catch (e) {}
+  return true;
+}
+async function verifyBiometric() {
+  const id = getSavedPasskey();
+  if (!id) return false;
+  const assertion = await navigator.credentials.get({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ type: "public-key", id: bufFromB64url(id) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  // the authenticator sets the "user verified" flag only after Face ID / fingerprint passed
+  const flags = new Uint8Array(assertion.response.authenticatorData)[32];
+  return !!(flags & 0x04);
+}
+
+/* One-time server login (Supabase Auth). The database only opens its
+   private tables to this signed-in admin — the PIN/Face ID alone can't. */
+function AdminServerLogin({ defaultEmail, onSuccess, onClose }) {
+  const [email, setEmail] = useState(defaultEmail || "");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function submit(e) {
+    e && e.preventDefault();
+    if (!email.trim() || !password) { setErr("נא למלא מייל וסיסמה"); return; }
+    setBusy(true); setErr("");
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) {
+        setErr(/invalid/i.test(error.message) ? "מייל או סיסמה שגויים" : error.message);
+        setBusy(false);
+        return;
+      }
+      const chk = await supabase.rpc("is_admin");
+      if (!chk.error && chk.data === false) {
+        await supabase.auth.signOut();
+        setErr("המשתמש הזה לא מוגדר כמנהל");
+        setBusy(false);
+        return;
+      }
+      vibrate(15);
+      onSuccess();
+    } catch (e2) {
+      setErr("אין חיבור לשרת");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="bb-modal-backdrop" style={{ alignItems: "center" }} onClick={onClose}>
+      <form className="bb-modal" style={{ borderRadius: 20, maxWidth: 360 }} onClick={(e) => e.stopPropagation()} onSubmit={submit}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 8 }}>
+          <div style={{ width: 52, height: 52, borderRadius: "50%", background: "var(--gold-wash)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Lock size={22} color="var(--gold-bright)" />
+          </div>
+        </div>
+        <h3 className="bb-serif" style={{ fontSize: 17, marginBottom: 4, textAlign: "center" }}>חיבור מאובטח לשרת</h3>
+        <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 18, textAlign: "center", lineHeight: 1.6 }}>
+          פעם אחת בכל טלפון. אחרי זה מספיק הקוד או זיהוי הפנים.
+        </p>
+        <div className="bb-field">
+          <label>מייל</label>
+          <input type="email" dir="ltr" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} />
+        </div>
+        <div className="bb-field">
+          <label>סיסמה</label>
+          <input type="password" dir="ltr" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+        </div>
+        {err && <div style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12, textAlign: "center" }}>{err}</div>}
+        <button type="submit" className="bb-btn bb-btn-primary" style={{ width: "100%", marginBottom: 8 }} disabled={busy}>
+          {busy ? "מתחבר..." : "כניסה"}
+        </button>
+        <button type="button" className="bb-btn bb-btn-ghost" style={{ width: "100%" }} onClick={onClose}>ביטול</button>
+      </form>
+    </div>
+  );
+}
+
 function PinGate({ onSuccess, onClose }) {
   const [entered, setEntered] = useState("");
   const [shake, setShake] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [bioSaved, setBioSaved] = useState(false);
+  const [offerBio, setOfferBio] = useState(false); // after a correct code: "use Face ID next time?"
+  const [bioError, setBioError] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    biometricSupported().then((ok) => { if (alive) { setBioAvailable(ok); setBioSaved(ok && !!getSavedPasskey()); } });
+    return () => { alive = false; };
+  }, []);
+
+  async function tryBiometric() {
+    setBioError("");
+    try {
+      if (await verifyBiometric()) { vibrate(15); onSuccess(); return; }
+      setBioError("הזיהוי לא הצליח — אפשר להיכנס עם הקוד");
+    } catch (e) {
+      setBioError("הזיהוי בוטל — אפשר להיכנס עם הקוד");
+    }
+  }
+
+  async function enableBiometric() {
+    setBioError("");
+    try {
+      await registerBiometric();
+      vibrate(15);
+      onSuccess();
+    } catch (e) {
+      setBioError("לא הצלחנו להפעיל זיהוי — נכנסים עם הקוד");
+      setTimeout(onSuccess, 1200);
+    }
+  }
 
   async function tryVerify(pin) {
     setChecking(true);
@@ -841,6 +1087,7 @@ function PinGate({ onSuccess, onClose }) {
     setChecking(false);
     if (hex === ADMIN_PIN_HASH) {
       vibrate(15);
+      if (bioAvailable && !bioSaved) { setOfferBio(true); return; }
       onSuccess();
     } else {
       vibrate([30, 40, 30]);
@@ -868,8 +1115,29 @@ function PinGate({ onSuccess, onClose }) {
             <ShieldCheck size={24} color="var(--gold-bright)" />
           </div>
         </div>
+        {offerBio ? (
+          <>
+            <h3 className="bb-serif" style={{ fontSize: 17, marginBottom: 6 }}>להיכנס בפעם הבאה עם זיהוי פנים?</h3>
+            <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 18, lineHeight: 1.6 }}>
+              Face ID באייפון, או טביעת אצבע / זיהוי פנים באנדרואיד.<br />הקוד ימשיך לעבוד תמיד.
+            </p>
+            <button className="bb-btn bb-btn-primary" style={{ width: "100%", marginBottom: 8 }} onClick={enableBiometric}>
+              <ScanFace size={18} /> כן, הפעל זיהוי
+            </button>
+            <button className="bb-btn bb-btn-ghost" style={{ width: "100%" }} onClick={onSuccess}>לא עכשיו</button>
+            {bioError && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 10 }}>{bioError}</div>}
+          </>
+        ) : (
+        <>
         <h3 className="bb-serif" style={{ fontSize: 17, marginBottom: 4 }}>כניסת מנהל</h3>
-        <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 20 }}>הזינו את קוד הגישה</p>
+        <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: bioSaved ? 12 : 20 }}>הזינו את קוד הגישה</p>
+
+        {bioSaved && (
+          <button className="bb-btn bb-btn-primary" style={{ width: "100%", marginBottom: 16 }} onClick={tryBiometric}>
+            <ScanFace size={18} /> כניסה עם זיהוי פנים
+          </button>
+        )}
+        {bioError && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: -8, marginBottom: 12 }}>{bioError}</div>}
 
         <div style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 24 }}>
           {Array.from({ length: 4 }).map((_, i) => (
@@ -895,6 +1163,8 @@ function PinGate({ onSuccess, onClose }) {
           <button className="bb-btn bb-btn-ghost" style={{ fontSize: 18, padding: "14px 0" }} onClick={() => press("0")}>0</button>
           <button className="bb-btn bb-btn-ghost" style={{ fontSize: 13, padding: "14px 0" }} onClick={() => setEntered((e) => e.slice(0, -1))}>מחק</button>
         </div>
+        </>
+        )}
       </div>
       <style>{`@keyframes bb-shake { 0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-8px); } 40%,80% { transform: translateX(8px); } }`}</style>
     </div>
@@ -906,8 +1176,9 @@ function PinGate({ onSuccess, onClose }) {
    ============================================================================ */
 function ClientView({ businessName, logo, services, appointments, weeklyHours, setAppointments, clients, setClients, pushToast, logActivity, setNotificationLog, onBackToLanding, notifyAdmin }) {
   const [myBookingIds, setMyBookingIds] = useState([]); // appointments booked in this session — powers "התור שלי"
+  const [cancelTokens, setCancelTokens] = useState({}); // id -> secret token, lets this client (only) cancel their own booking
   const [myApptsOpen, setMyApptsOpen] = useState(false);
-  const [step, setStep] = useState(1); // 1 service, 2 datetime, 3 details, 4 confirm, 5 success
+  const [step, setStep] = useState(2); // service step skipped: 2 datetime, 3 details, 4 confirm, 5 success
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [selectedService, setSelectedService] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
@@ -922,7 +1193,20 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
   const [whatsappStatus, setWhatsappStatus] = useState(null); // null | 'sending' | 'sent' | 'no_phone'
   const [bookedAppt, setBookedAppt] = useState(null);
 
-  const days = useMemo(() => nextNDays(14), []);
+  // only days the shop is open (closed days are hidden, not greyed out)
+  const days = useMemo(
+    () => nextNDays(28).filter((d) => !weeklyHours?.[d.getDay()]?.closed).slice(0, 10),
+    [weeklyHours]
+  );
+
+  // the only service clients book is "תספורת גבר" — picked automatically
+  const defaultService = useMemo(
+    () => services.find((s) => (s.name || "").trim() === "תספורת גבר") || services[0] || null,
+    [services]
+  );
+  useEffect(() => {
+    if (!selectedService && defaultService) setSelectedService(defaultService);
+  }, [defaultService, selectedService]);
 
   // simulate a brief network fetch when entering the date/time step (skeleton demo)
   useEffect(() => {
@@ -942,8 +1226,19 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
   const bookedTimesForDay = useMemo(() => {
     if (!selectedDate) return new Set();
     const key = fmtDateKey(selectedDate);
-    return new Set(appointments.filter((a) => a.date === key && a.status !== "cancelled").map((a) => a.time));
-  }, [appointments, selectedDate]);
+    const dayAppts = appointments.filter((a) => a.date === key && a.status !== "cancelled");
+    const taken = new Set(dayAppts.map((a) => a.time));
+    slotsForDay.forEach((slot) => {
+      const sMin = timeToMinutes(slot);
+      const eMin = sMin + SLOT_MINUTES;
+      if (dayAppts.some((a) => {
+        const aStart = timeToMinutes(a.time);
+        const aEnd = aStart + (a.duration || DEFAULT_APPT_DURATION);
+        return aStart < eMin && aEnd > sMin;
+      })) taken.add(slot);
+    });
+    return taken;
+  }, [appointments, selectedDate, slotsForDay]);
 
   const now = new Date();
   const isToday = selectedDate && fmtDateKey(selectedDate) === fmtDateKey(now);
@@ -965,6 +1260,29 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
     setStep(n);
   }
 
+  // earliest free 20-min slot across the upcoming working days
+  const nearestFree = useMemo(() => {
+    const nowD = new Date();
+    const nowKey = fmtDateKey(nowD);
+    const nowMin = nowD.getHours() * 60 + nowD.getMinutes();
+    for (const d of days) {
+      const h = weeklyHours?.[d.getDay()];
+      if (!h || h.closed) continue;
+      const key = fmtDateKey(d);
+      const dayAppts = appointments.filter((a) => a.date === key && a.status !== "cancelled");
+      for (const slot of genSlots(h.open, h.close)) {
+        const sMin = timeToMinutes(slot);
+        if (key === nowKey && sMin <= nowMin) continue;
+        const taken = dayAppts.some((a) => {
+          const aStart = timeToMinutes(a.time);
+          return aStart < sMin + SLOT_MINUTES && aStart + (a.duration || DEFAULT_APPT_DURATION) > sMin;
+        });
+        if (!taken) return { date: d, time: slot };
+      }
+    }
+    return null;
+  }, [days, weeklyHours, appointments]);
+
   function handleConfirmSubmit() {
     // honeypot check — silently drop bot submissions
     if (honeypot) return;
@@ -985,15 +1303,48 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
     setTimeout(async () => {
       const dateKey = fmtDateKey(selectedDate);
       // race-condition guard: re-check slot wasn't just taken by someone else
-      const clash = appointments.some(
-        (a) => a.date === dateKey && a.time === selectedTime && a.status !== "cancelled"
-      );
+      const selMin = timeToMinutes(selectedTime);
+      const clash = appointments.some((a) => {
+        if (a.date !== dateKey || a.status === "cancelled") return false;
+        const aStart = timeToMinutes(a.time);
+        const aEnd = aStart + (a.duration || DEFAULT_APPT_DURATION);
+        return aStart < selMin + SLOT_MINUTES && aEnd > selMin;
+      });
       if (clash) {
         setSubmitting(false);
         setConflict("התור הזה נתפס הרגע על ידי לקוח אחר. בחרו שעה פנויה אחרת.");
         return;
       }
 
+      // secure path: one closed server function validates, checks overlaps,
+      // creates the client + appointment and notifies the admin
+      const rpc = await remoteRpc("request_booking", {
+        p_name: name, p_phone: phone || "", p_date: dateKey, p_time: selectedTime, p_service_id: selectedService.id,
+      });
+      if (!rpc.missing) {
+        if (!rpc.ok) {
+          setSubmitting(false);
+          setConflict(rpc.reason === "taken" ? "התור הזה נתפס הרגע על ידי לקוח אחר. בחרו שעה פנויה אחרת." : rpc.reason);
+          return;
+        }
+        const appt = rpc.appointment;
+        setAppointments((a) => [...a, appt]);
+        setMyBookingIds((ids) => [...ids, appt.id]);
+        setCancelTokens((t) => ({ ...t, [appt.id]: appt.cancelToken }));
+        vibrate([16, 40, 24]);
+        setBookedAppt(appt);
+        setSubmitting(false);
+        setStep(5);
+        if (phone) {
+          setWhatsappStatus("sending");
+          setTimeout(() => setWhatsappStatus("sent"), 1400);
+        } else {
+          setWhatsappStatus("no_phone");
+        }
+        return;
+      }
+
+      // legacy path (until security-step1.sql is run)
       // match a returning client by phone: local list first (admin/prototype),
       // otherwise a targeted server lookup — never by downloading everyone's data
       let client = phone ? clients.find((c) => c.phone === phone) : null;
@@ -1020,7 +1371,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
       };
       setAppointments((a) => [...a, appt]);
       remoteInsertRow("appointments", appt);
-      logActivity(`התקבלה בקשת תור: ${name} · ${selectedService.name} · ${dateKey} ${selectedTime}`);
+      logActivity(`התקבלה בקשת תור: ${name} · ${selectedService.name} · ${dateKey} ${selectedTime}`, { forceRemote: true });
       notifyAdmin && notifyAdmin("new_booking", {
         apptId: appt.id,
         clientName: name,
@@ -1028,7 +1379,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
         date: dateKey,
         time: selectedTime,
         phone: phone || "",
-      });
+      }, { forceRemote: true });
       setMyBookingIds((ids) => [...ids, appt.id]);
       vibrate([16, 40, 24]); // subtle success pattern on mobile
       setBookedAppt(appt);
@@ -1053,8 +1404,8 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
   }
 
   function resetFlow() {
-    setStep(1);
-    setSelectedService(null);
+    setStep(2);
+    setSelectedService(defaultService);
     setSelectedDate(null);
     setSelectedTime(null);
     setName("");
@@ -1070,28 +1421,28 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
   return (
     <div className="bb-app">
       <div className="bb-topbar">
-        {step === 1 && (
+        {step === 2 && (
           <button className="bb-icon-btn" onClick={onBackToLanding} title="חזרה למסך הפתיחה">
             <ChevronRight size={20} className="bb-rtl-flip" />
           </button>
         )}
         <div
           className="bb-serif"
-          style={{ fontSize: 17, fontWeight: 700, color: "var(--gold-bright)", flex: 1, textAlign: step === 1 ? "center" : "start", display: "flex", alignItems: "center", justifyContent: step === 1 ? "center" : "flex-start", gap: 8 }}
+          style={{ fontSize: 17, fontWeight: 700, color: "var(--gold-bright)", flex: 1, textAlign: step === 2 ? "center" : "start", display: "flex", alignItems: "center", justifyContent: step === 2 ? "center" : "flex-start", gap: 8 }}
         >
           {logo && <img src={logo} alt="" style={{ width: 26, height: 26, borderRadius: "50%", objectFit: "cover" }} />}
           {businessName}
         </div>
-        {step > 1 && step < 5 && (
+        {step > 2 && step < 5 && (
           <button className="bb-icon-btn" onClick={() => goStep(step - 1)}>
             <ChevronRight size={20} className="bb-rtl-flip" />
           </button>
         )}
-        {step === 1 && (
+        {step === 2 && (
           <button className="bb-icon-btn" onClick={() => setMyApptsOpen(true)} title="התור שלי" style={{ position: "relative" }}>
             <CalendarClock size={19} />
             {myActiveCount > 0 && (
-              <span style={{ position: "absolute", top: 0, left: 0, background: "var(--gold)", color: "#1a1509", fontSize: 9.5, fontWeight: 700, borderRadius: 10, minWidth: 15, height: 15, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>
+              <span style={{ position: "absolute", top: 0, left: 0, background: "var(--gold)", color: "var(--on-gold)", fontSize: 12, fontWeight: 700, borderRadius: 10, minWidth: 15, height: 15, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" }}>
                 {myActiveCount}
               </span>
             )}
@@ -1103,7 +1454,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
         {/* progress dots */}
         {step < 5 && (
           <div style={{ display: "flex", gap: 6, marginBottom: 22 }}>
-            {[1, 2, 3, 4].map((n) => (
+            {[2, 3, 4].map((n) => (
               <div key={n} style={{ height: 3, flex: 1, borderRadius: 2, background: n <= step ? "var(--gold)" : "var(--border)" }} />
             ))}
           </div>
@@ -1143,6 +1494,23 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
           <>
             <h2 className="bb-serif" style={{ fontSize: 22, marginBottom: 4 }}>בחרו תאריך ושעה</h2>
             <p style={{ color: "var(--muted)", fontSize: 13.5, marginBottom: 14 }}>{selectedService?.name}</p>
+
+            {nearestFree && (
+              <button
+                className="bb-card"
+                onClick={() => { setSelectedDate(nearestFree.date); setSelectedTime(nearestFree.time); goStep(3); }}
+                style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, marginBottom: 16, border: "1.5px solid var(--gold)", background: "var(--gold-wash)", cursor: "pointer", textAlign: "start", font: "inherit", color: "inherit" }}
+              >
+                <Zap size={20} color="var(--gold-bright)" />
+                <span style={{ flex: 1 }}>
+                  <span style={{ display: "block", fontSize: 12, color: "var(--gold-bright)", fontWeight: 600 }}>התור הפנוי הקרוב</span>
+                  <span style={{ display: "block", fontWeight: 700, fontSize: 15.5 }}>
+                    {DOW_FULL_HE[nearestFree.date.getDay()]} {nearestFree.date.getDate()}/{nearestFree.date.getMonth() + 1} · <span className="bb-mono-num">{nearestFree.time}</span>
+                  </span>
+                </span>
+                <ChevronLeft size={18} className="bb-rtl-flip" color="var(--gold-bright)" />
+              </button>
+            )}
 
             <div className="bb-date-strip">
               {days.map((d) => {
@@ -1222,7 +1590,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
               <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="050-1234567" inputMode="tel" />
               <FieldError msg={errors.phone} />
               {!errors.phone && (
-                <div style={{ fontSize: 11.5, color: "var(--muted-dim)", marginTop: 5 }}>
+                <div style={{ fontSize: 12.5, color: "var(--muted-dim)", marginTop: 5 }}>
                   ללא טלפון לא נוכל לשלוח תזכורת בוואטסאפ לפני התור
                 </div>
               )}
@@ -1266,7 +1634,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
             <p style={{ color: "var(--muted)", fontSize: 14, marginBottom: 12 }}>
               {selectedService?.name} · {DOW_FULL_HE[selectedDate?.getDay()]} {selectedDate?.getDate()}/{selectedDate?.getMonth() + 1} בשעה {selectedTime}
             </p>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "var(--warning-wash)", border: "1px solid rgba(209,168,92,0.3)", borderRadius: 20, padding: "6px 14px", marginBottom: 20 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "var(--warning-wash)", border: "1px solid var(--warning-wash)", borderRadius: 20, padding: "6px 14px", marginBottom: 20 }}>
               <Clock size={13} color="var(--warning)" />
               <span style={{ fontSize: 12.5, color: "var(--warning)", fontWeight: 600 }}>ממתין לאישור המספרה</span>
             </div>
@@ -1306,7 +1674,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
             </button>
           )}
           {step === 2 && (
-            <button className="bb-btn bb-btn-primary" style={{ width: "100%" }} disabled={!selectedTime} onClick={() => goStep(3)}>
+            <button className="bb-btn bb-btn-primary" style={{ width: "100%" }} disabled={!selectedTime || !selectedService} onClick={() => goStep(3)}>
               המשך <ChevronLeft size={18} className="bb-rtl-flip" />
             </button>
           )}
@@ -1332,22 +1700,30 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
         <MyAppointmentsModal
           appts={myAppts}
           businessName={businessName}
-          onCancel={(appt) => {
+          onCancel={async (appt) => {
             const msUntil = apptDateTime(appt).getTime() - Date.now();
             if (msUntil < 2 * 60 * 60 * 1000) {
               pushToast("לא ניתן לבטל פחות משעתיים לפני התור — צרו קשר עם המספרה", { type: "danger" });
               return;
             }
+            const rpc = await remoteRpc("cancel_my_appointment", { p_id: appt.id, p_token: cancelTokens[appt.id] || "" });
+            if (!rpc.missing) {
+              if (!rpc.ok) { pushToast(rpc.reason || "הביטול נכשל", { type: "danger" }); return; }
+              setAppointments((appts) => appts.map((a) => (a.id === appt.id ? { ...a, status: "cancelled" } : a)));
+              vibrate(12);
+              pushToast("התור בוטל בהצלחה", { type: "success" });
+              return;
+            }
             setAppointments((appts) => appts.map((a) => (a.id === appt.id ? { ...a, status: "cancelled" } : a)));
             remoteSetAppointmentStatus(appt.id, "cancelled");
-            logActivity(`לקוח ביטל תור: ${appt.clientName || "לקוח"} · ${appt.date} ${appt.time}`);
+            logActivity(`לקוח ביטל תור: ${appt.clientName || "לקוח"} · ${appt.date} ${appt.time}`, { forceRemote: true });
             notifyAdmin && notifyAdmin("client_cancelled", {
               apptId: appt.id,
               clientName: appt.clientName,
               serviceName: appt.serviceName,
               date: appt.date,
               time: appt.time,
-            });
+            }, { forceRemote: true });
             vibrate(12);
             pushToast("התור בוטל בהצלחה", { type: "success" });
           }}
@@ -1395,7 +1771,7 @@ function MyAppointmentsModal({ appts, businessName, onCancel, onClose }) {
               </div>
             );
           })}
-          <p style={{ fontSize: 11.5, color: "var(--muted-dim)", textAlign: "center", margin: "4px 0 0" }}>
+          <p style={{ fontSize: 12.5, color: "var(--muted-dim)", textAlign: "center", margin: "4px 0 0" }}>
             ביטול אפשרי עד שעתיים לפני מועד התור
           </p>
         </div>
@@ -1422,6 +1798,7 @@ const ADMIN_TABS = [
   { id: "dashboard", label: "דשבורד", icon: Home },
   { id: "finance", label: "כספים", icon: Wallet },
   { id: "appointments", label: "תורים", icon: CalendarClock },
+  { id: "unpaid", label: "לתשלום", icon: Banknote },
   { id: "journal", label: "יומן", icon: BookOpen },
   { id: "clients", label: "לקוחות", icon: Users },
   { id: "services", label: "שירותים", icon: Scissors },
@@ -1432,6 +1809,10 @@ const ADMIN_TABS = [
 
 function AdminView(props) {
   const { businessName, setBusinessName, appointments, setAppointments, clients, services, activityLog, notificationLog, adminNotifications, setAdminNotifications, pushToast, logActivity, onLock } = props;
+  const overdueUnpaidCount = useMemo(
+    () => appointments.filter((a) => isUnpaid(a) && apptDateTime(a).getTime() <= Date.now()).length,
+    [appointments]
+  );
   const [tab, setTab] = useState("dashboard");
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(businessName);
@@ -1536,7 +1917,7 @@ function AdminView(props) {
           <button className="bb-icon-btn" onClick={openBell} title="התראות" style={{ position: "relative" }}>
             <Bell size={19} />
             {unreadCount > 0 && (
-              <span style={{ position: "absolute", top: -2, left: -2, background: "var(--danger)", color: "#fff", fontSize: 9.5, fontWeight: 700, borderRadius: 10, minWidth: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
+              <span style={{ position: "absolute", top: -2, left: -2, background: "var(--danger)", color: "#fff", fontSize: 12, fontWeight: 700, borderRadius: 10, minWidth: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px" }}>
                 {unreadCount > 9 ? "9+" : unreadCount}
               </span>
             )}
@@ -1564,6 +1945,9 @@ function AdminView(props) {
         {ADMIN_TABS.map((t) => (
           <button key={t.id} className={`bb-admin-tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
             <t.icon size={15} /> {t.label}
+            {t.id === "unpaid" && overdueUnpaidCount > 0 && (
+              <span className="bb-tab-count">{overdueUnpaidCount}</span>
+            )}
           </button>
         ))}
       </div>
@@ -1580,6 +1964,7 @@ function AdminView(props) {
             {tab === "dashboard" && <DashboardTab {...props} />}
             {tab === "finance" && <FinanceTab {...props} />}
             {tab === "appointments" && <AppointmentsTab {...props} />}
+            {tab === "unpaid" && <UnpaidTab {...props} />}
             {tab === "journal" && <JournalTab {...props} />}
             {tab === "clients" && <ClientsTab {...props} />}
             {tab === "services" && <ServicesTab {...props} />}
@@ -1632,7 +2017,7 @@ function NotificationPanel({ notifications, appointments, onDecide, onClose }) {
                   {t.title}
                 </div>
                 <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.6 }}>{t.body}</div>
-                <div style={{ fontSize: 10.5, color: "var(--muted-dim)", marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: "var(--muted-dim)", marginTop: 4 }}>
                   {new Date(n.ts).toLocaleString("he-IL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                 </div>
                 {stillPending && (
@@ -1646,7 +2031,7 @@ function NotificationPanel({ notifications, appointments, onDecide, onClose }) {
                   </div>
                 )}
                 {n.type === "new_booking" && n.handled && (
-                  <div style={{ fontSize: 11, color: appt?.status === "confirmed" ? "var(--success)" : "var(--danger)", marginTop: 6, fontWeight: 600 }}>
+                  <div style={{ fontSize: 12, color: appt?.status === "confirmed" ? "var(--success)" : "var(--danger)", marginTop: 6, fontWeight: 600 }}>
                     {appt?.status === "confirmed" ? "✓ אושר" : "✗ נדחה"}
                   </div>
                 )}
@@ -1699,6 +2084,16 @@ function DashboardTab({ appointments, clients, services, notificationLog, setApp
     const appt = appointments.find((a) => a.id === apptId);
     logActivity(decision === "confirmed" ? `התור של ${appt?.clientName || ""} אושר` : `בקשת התור של ${appt?.clientName || ""} נדחתה`);
     pushToast && pushToast(decision === "confirmed" ? "התור אושר ✓" : "הבקשה נדחתה", { type: decision === "confirmed" ? "success" : "danger" });
+  }
+
+  function approveAllPending() {
+    const ids = pendingRequests.map((a) => a.id);
+    if (!ids.length) return;
+    setAppointments((as) => as.map((a) => (ids.includes(a.id) ? { ...a, status: "confirmed" } : a)));
+    ids.forEach((id) => remoteSetAppointmentStatus(id, "confirmed"));
+    setAdminNotifications && setAdminNotifications((ns) => ns.map((n) => (ids.includes(n.apptId) ? { ...n, handled: true, read: true } : n)));
+    logActivity(`אושרו ${ids.length} בקשות תור בבת אחת`);
+    vibrate(15);
   }
 
   const [editingAppt, setEditingAppt] = useState(null);
@@ -1768,12 +2163,17 @@ function DashboardTab({ appointments, clients, services, notificationLog, setApp
           <div className="bb-card" style={{ border: "1.5px solid var(--warning)", background: "var(--warning-wash)", marginBottom: 12, padding: "14px 14px 6px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
               <Bell size={15} color="var(--warning)" />
-              <span style={{ fontWeight: 700, fontSize: 14, color: "var(--warning)" }}>
+              <span style={{ fontWeight: 700, fontSize: 14, color: "var(--warning)", flex: 1 }}>
                 {pendingRequests.length} בקשות תור ממתינות לאישור שלך
               </span>
+              {pendingRequests.length > 1 && (
+                <button className="bb-btn bb-btn-primary bb-btn-sm" onClick={approveAllPending}>
+                  <CheckCheck size={14} /> אשר הכל
+                </button>
+              )}
             </div>
             {pendingRequests.map((a) => (
-              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: "1px solid rgba(209,168,92,0.2)" }}>
+              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: "1px solid var(--warning-wash)" }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, fontSize: 13.5 }}>{a.clientName}</div>
                   <div style={{ fontSize: 12, color: "var(--muted)" }}>{a.serviceName} · {a.date} · {a.time}{a.phone ? ` · ${a.phone}` : ""}</div>
@@ -1792,17 +2192,17 @@ function DashboardTab({ appointments, clients, services, notificationLog, setApp
         {currentAppt && (
           <div className="bb-card" style={{ border: "1.5px solid var(--gold)", background: "var(--gold-wash)", display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
             <div style={{ width: 40, height: 40, borderRadius: "50%", background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <Timer size={19} color="#1a1509" />
+              <Timer size={19} color="var(--on-gold)" />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 11.5, color: "var(--gold-bright)", fontWeight: 600, marginBottom: 2 }}>על הכיסא עכשיו</div>
+              <div style={{ fontSize: 12.5, color: "var(--gold-bright)", fontWeight: 600, marginBottom: 2 }}>על הכיסא עכשיו</div>
               <div style={{ fontWeight: 700, fontSize: 15 }}>{currentAppt.clientName} · {currentAppt.serviceName}</div>
             </div>
             <div style={{ textAlign: "center" }}>
               <div className="bb-mono-num" style={{ fontFamily: "'Frank Ruhl Libre'", fontSize: 19, fontWeight: 700, color: "var(--gold-bright)" }}>
                 {Math.max(currentRemaining, 0)}
               </div>
-              <div style={{ fontSize: 10, color: "var(--muted)" }}>דק׳ נותרו</div>
+              <div style={{ fontSize: 11.5, color: "var(--muted)" }}>דק׳ נותרו</div>
             </div>
           </div>
         )}
@@ -1852,8 +2252,167 @@ function SectionTitle({ title, style }) {
 function FinanceStat({ label, value, highlight }) {
   return (
     <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 10, padding: "9px 11px" }}>
-      <div style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 3 }}>{label}</div>
       <div className="bb-mono-num" style={{ fontSize: 14, fontWeight: 700, color: highlight ? "var(--gold-bright)" : "var(--cream)" }}>{value}</div>
+    </div>
+  );
+}
+
+/* ---------- UNPAID — every booked appointment whose payment wasn't confirmed yet ----------
+   "Paid" in this app = status "done" with the final price (that's what Finance counts as revenue). */
+function isUnpaid(a) {
+  return a.status === "confirmed" || a.status === "pending";
+}
+
+function UnpaidTab({ appointments, setAppointments, services, pushToast, logActivity }) {
+  const [amounts, setAmounts] = useState({}); // id -> edited amount (string)
+  const [showFuture, setShowFuture] = useState(false);
+  const [justPaid, setJustPaid] = useState([]); // [{ appt (before), amount }] — this session, for undo
+
+  const nowTs = Date.now();
+  const todayKey = fmtDateKey(new Date());
+  const unpaid = appointments
+    .filter(isUnpaid)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  const overdue = unpaid.filter((a) => apptDateTime(a).getTime() <= nowTs);
+  const laterToday = unpaid.filter((a) => a.date === todayKey && apptDateTime(a).getTime() > nowTs);
+  const future = unpaid.filter((a) => a.date > todayKey);
+
+  function defaultAmount(a) {
+    if (a.price != null && a.price !== "") return Number(a.price);
+    const svc = services.find((s) => s.id === a.serviceId || s.name === a.serviceName);
+    return svc?.price ?? 0;
+  }
+  function amountOf(a) {
+    const v = amounts[a.id];
+    return v === undefined ? String(defaultAmount(a)) : v;
+  }
+  const totalOverdue = overdue.reduce((sum, a) => sum + (Number(amountOf(a)) || 0), 0);
+
+  function save(updated) {
+    setAppointments((as) => as.map((x) => (x.id === updated.id ? updated : x)));
+    remoteInsertRow("appointments", updated).then((res) => {
+      if (!res.ok) pushToast && pushToast(`⚠️ השמירה נכשלה: ${res.reason}`, { type: "danger", duration: 10000 });
+    });
+  }
+
+  function markPaid(a) {
+    const amount = Math.max(0, Math.round(Number(amountOf(a)) || 0));
+    save({ ...a, status: "done", price: amount, paidAt: Date.now() });
+    setJustPaid((list) => [{ appt: a, amount }, ...list].slice(0, 20));
+    setAmounts((m) => { const n = { ...m }; delete n[a.id]; return n; });
+    logActivity(`תשלום אושר: ${a.clientName} · ₪${amount} · ${a.date} ${a.time}`);
+    vibrate(15);
+  }
+
+  function undoPaid(entry) {
+    const { paidAt, ...rest } = entry.appt;
+    save({ ...rest });
+    setJustPaid((list) => list.filter((e) => e !== entry));
+    logActivity(`בוטל אישור תשלום: ${entry.appt.clientName} · ${entry.appt.date} ${entry.appt.time}`);
+    vibrate(10);
+  }
+
+  function renderRow(a) {
+    const d = new Date(a.date + "T12:00");
+    return (
+      <div className="bb-pay-row" key={a.id}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 15.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {a.clientName || "לקוח"}
+            {a.status === "pending" && <span className="bb-badge pending" style={{ marginInlineStart: 6, fontSize: 11 }}>לא אושר</span>}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2, whiteSpace: "nowrap" }}>
+            {a.date === todayKey ? "היום" : `${DOW_HE[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`} · <span className="bb-mono-num" style={{ color: "var(--cream)", fontWeight: 600 }}>{a.time}</span>
+          </div>
+        </div>
+        <label className="bb-pay-amount" title="סכום — אפשר לשנות">
+          <span style={{ color: "var(--muted)", fontSize: 15 }}>₪</span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            value={amountOf(a)}
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => setAmounts((m) => ({ ...m, [a.id]: e.target.value }))}
+            onKeyDown={(e) => e.key === "Enter" && markPaid(a)}
+            aria-label={`סכום לתשלום של ${a.clientName}`}
+          />
+        </label>
+        <button className="bb-pay-v" onClick={() => markPaid(a)} aria-label={`אשר תשלום של ${a.clientName}`} title="אשר תשלום">
+          <Check size={24} strokeWidth={3} />
+        </button>
+      </div>
+    );
+  }
+
+  function renderSection(title, items, tone) {
+    if (!items.length) return null;
+    return (
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "0 4px 8px" }}>
+          <span style={{ fontWeight: 700, fontSize: 14, color: tone || "var(--cream)" }}>{title}</span>
+          <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{items.length}</span>
+        </div>
+        <div className="bb-card" style={{ padding: 0, overflow: "hidden" }}>
+          {items.map((a) => renderRow(a))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "0 16px" }}>
+      <div className="bb-card" style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16, background: overdue.length ? "var(--warning-wash)" : "var(--success-wash)", borderColor: "transparent" }}>
+        <Banknote size={26} color={overdue.length ? "var(--warning)" : "var(--success)"} />
+        <div style={{ flex: 1 }}>
+          {overdue.length ? (
+            <>
+              <div className="bb-mono-num" style={{ fontSize: 22, fontWeight: 800 }}>₪{totalOverdue.toLocaleString("he-IL")}</div>
+              <div style={{ fontSize: 13, color: "var(--muted)" }}>{overdue.length === 1 ? "תור אחד שכבר עבר ועוד לא סומן כשולם" : `${overdue.length} תורים שכבר עברו ועוד לא סומנו כשולמו`}</div>
+            </>
+          ) : (
+            <div style={{ fontWeight: 700, fontSize: 15 }}>הכל מסודר — אין תשלומים פתוחים על תורים שעברו</div>
+          )}
+        </div>
+      </div>
+
+      {renderSection("עברו — ממתינים לאישור תשלום", overdue, "var(--warning)")}
+      {renderSection("בהמשך היום", laterToday)}
+
+      {future.length > 0 && (
+        showFuture ? (
+          renderSection("תורים עתידיים", future)
+        ) : (
+          <button className="bb-btn bb-btn-ghost" style={{ width: "100%", marginBottom: 16 }} onClick={() => setShowFuture(true)}>
+            הצג גם תורים עתידיים ({future.length})
+          </button>
+        )
+      )}
+
+      {justPaid.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "var(--success)", padding: "0 4px 8px" }}>שולמו עכשיו</div>
+          <div className="bb-card" style={{ padding: 0, overflow: "hidden" }}>
+            {justPaid.map((e, i) => (
+              <div key={e.appt.id + i} className="bb-pay-row" style={{ minHeight: 52, opacity: 0.85 }}>
+                <Check size={18} color="var(--success)" />
+                <div style={{ flex: 1, minWidth: 0, fontSize: 14 }}>
+                  <b>{e.appt.clientName}</b> · <span className="bb-mono-num">₪{e.amount}</span>
+                  <span style={{ color: "var(--muted)", fontSize: 12.5 }}> · {e.appt.time}</span>
+                </div>
+                <button className="bb-btn bb-btn-ghost bb-btn-sm" onClick={() => undoPaid(e)}>
+                  <Undo2 size={14} /> ביטול
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!unpaid.length && !justPaid.length && (
+        <EmptyState icon={Banknote} title="אין תורים שממתינים לתשלום" subtitle="כל תור שנקבע יופיע כאן עד שתאשר את התשלום שלו" />
+      )}
     </div>
   );
 }
@@ -1976,7 +2535,7 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
                 <div className="bb-avatar">{initials(client.name)}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{client.name}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{stats.visits} ביקורים · ₪{stats.avgTicket} ממוצע</div>
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{stats.visits} ביקורים · ₪{stats.avgTicket} ממוצע</div>
                 </div>
                 <div className="bb-serif" style={{ color: "var(--gold-bright)", fontWeight: 700 }}>₪{stats.totalSpent}</div>
               </div>
@@ -1999,7 +2558,7 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{e.description}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{e.category} · {e.date}</div>
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>{e.category} · {e.date}</div>
                 </div>
                 <div style={{ fontWeight: 700, color: "var(--danger)" }}>₪{e.amount}</div>
                 <button className="bb-icon-btn" onClick={() => openEdit(e)}><Pencil size={14} /></button>
@@ -2050,19 +2609,22 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
 function AppointmentRow({ appt, compact, onStatusChange, onEdit, onDelete }) {
   const statusLabels = { confirmed: "מאושר", pending: "ממתין", cancelled: "בוטל", done: "הושלם" };
   return (
-    <div className="bb-row">
+    <div className={`bb-row st-${appt.status}`}>
       <div className="bb-avatar">{initials(appt.clientName)}</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 14.5 }}>{appt.clientName}</div>
-        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-          {appt.serviceName} · {appt.time}{!compact ? ` · ${appt.date}` : ""} · {appt.duration ?? DEFAULT_APPT_DURATION} דק׳ · ₪{appt.price ?? 0}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 15.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{appt.clientName}</div>
+        <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <span className="bb-mono-num" style={{ color: "var(--cream)", fontWeight: 600 }}>{appt.time}</span>
+          {!compact && (() => { const d = new Date(appt.date + "T12:00"); return ` · ${DOW_HE[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`; })()}
+          {(appt.duration ?? DEFAULT_APPT_DURATION) !== DEFAULT_APPT_DURATION ? ` · ${appt.duration} דק׳` : ""}
         </div>
+        <div style={{ fontSize: 12.5, color: "var(--muted-dim)", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{appt.serviceName}</div>
       </div>
       {onStatusChange ? (
         <select
           value={appt.status}
           onChange={(e) => onStatusChange(appt.id, e.target.value)}
-          style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--cream)", fontSize: 12, padding: "6px 8px" }}
+          className={`bb-status-select st-${appt.status}`}
         >
           <option value="pending">ממתין</option>
           <option value="confirmed">מאושר</option>
@@ -2175,6 +2737,7 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
           weekOffset={weekOffset}
           setWeekOffset={setWeekOffset}
           onSelect={(a) => setEditingAppt(a)}
+          onCreateAt={(date, time) => setCreatingAppt({ date, time })}
         />
       ) : (
         <>
@@ -2207,7 +2770,7 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
         <EditAppointmentModal appt={editingAppt} services={services} clients={clients} onSave={saveAppt} onClose={() => setEditingAppt(null)} />
       )}
       {creatingAppt && (
-        <EditAppointmentModal appt={null} services={services} clients={clients} onSave={createAppt} onClose={() => setCreatingAppt(false)} />
+        <EditAppointmentModal appt={null} initial={typeof creatingAppt === "object" ? creatingAppt : null} services={services} clients={clients} onSave={createAppt} onClose={() => setCreatingAppt(false)} />
       )}
     </div>
   );
@@ -2216,22 +2779,24 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
 /* ---------- WEEKLY VISUAL CALENDAR — days across, hours down, appointment
    blocks positioned to scale. The at-a-glance view of the barber's week. ---------- */
 const WEEK_STATUS_COLORS = {
-  confirmed: { bg: "var(--gold-wash)", border: "var(--gold)", text: "var(--gold-bright)" },
+  confirmed: { bg: "var(--success-wash)", border: "var(--success)", text: "var(--success)" },
   pending: { bg: "var(--warning-wash)", border: "var(--warning)", text: "var(--warning)" },
-  done: { bg: "var(--success-wash)", border: "var(--success)", text: "var(--success)" },
+  done: { bg: "var(--gold-wash)", border: "var(--gold)", text: "var(--gold-bright)" },
   cancelled: { bg: "var(--danger-wash)", border: "var(--danger)", text: "var(--danger)" },
 };
 
-function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, onSelect }) {
+function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, onSelect, onCreateAt }) {
   const start = weekStart(weekOffset);
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(start);
     d.setDate(d.getDate() + i);
     return d;
   });
+  const weekKeys = days.map(fmtDateKey);
+  const weekAppts = appointments.filter((a) => weekKeys.includes(a.date) && a.status !== "cancelled");
 
-  // visible hour range: from the earliest opening to the latest closing across
-  // the week (fallback 08:00–21:00 when everything is closed)
+  // visible hour range: earliest opening → latest closing across the week,
+  // widened to include any appointment booked outside opening hours
   let minHour = 24, maxHour = 0;
   Object.values(weeklyHours || {}).forEach((h) => {
     if (h && !h.closed) {
@@ -2239,10 +2804,35 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
       maxHour = Math.max(maxHour, Math.ceil(timeToMinutes(h.close) / 60));
     }
   });
+  weekAppts.forEach((a) => {
+    const s = timeToMinutes(a.time);
+    const e = s + (a.duration || DEFAULT_APPT_DURATION);
+    minHour = Math.min(minHour, Math.floor(s / 60));
+    maxHour = Math.max(maxHour, Math.ceil(e / 60));
+  });
   if (minHour >= maxHour) { minHour = 8; maxHour = 21; }
   const hours = Array.from({ length: maxHour - minHour }, (_, i) => minHour + i);
-  const HOUR_PX = 52;
   const gridStartMin = minHour * 60;
+
+  // fit the whole week on one screen: hour height is computed from the space
+  // left below the grid's top edge, so nothing needs scrolling on a phone
+  const gridRef = useRef(null);
+  const [hourPx, setHourPx] = useState(40);
+  useEffect(() => {
+    function fit() {
+      const el = gridRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      const avail = window.innerHeight - top - 44 - 34; // day header row + legend/margin
+      const px = Math.floor(avail / Math.max(hours.length, 1));
+      setHourPx(Math.max(24, Math.min(56, px)));
+    }
+    fit();
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
+    return () => { window.removeEventListener("resize", fit); window.removeEventListener("orientationchange", fit); };
+  }, [hours.length]);
+  const HOUR_PX = hourPx;
 
   const todayKey = fmtDateKey(new Date());
   const now = new Date();
@@ -2251,14 +2841,19 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
 
   const rangeLabel = `${days[0].getDate()}/${days[0].getMonth() + 1} – ${days[6].getDate()}/${days[6].getMonth() + 1}`;
 
+  // closed days with no appointments shrink to a thin strip so working days get the width
+  const isNarrow = (d) => weeklyHours[d.getDay()]?.closed && !weekAppts.some((a) => a.date === fmtDateKey(d));
+  const cols = "30px " + days.map((d) => (isNarrow(d) ? "18px" : "minmax(0, 1fr)")).join(" ");
+
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <button className="bb-icon-btn" onClick={() => setWeekOffset(weekOffset + 1)} title="שבוע הבא">
           <ChevronLeft size={18} className="bb-rtl-flip" />
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span className="bb-serif" style={{ fontSize: 14.5, fontWeight: 700 }}>{rangeLabel}</span>
+          <span style={{ fontSize: 11.5, color: "var(--muted)" }}>{weekAppts.length} תורים</span>
           {weekOffset !== 0 && (
             <button className="bb-btn bb-btn-ghost bb-btn-sm" style={{ padding: "4px 10px", fontSize: 11.5 }} onClick={() => setWeekOffset(0)}>
               היום
@@ -2270,26 +2865,27 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
         </button>
       </div>
 
-      <div className="bb-card" style={{ padding: 0, overflowX: "auto" }}>
-        <div style={{ minWidth: 640, display: "grid", gridTemplateColumns: "44px repeat(7, 1fr)" }}>
+      <div className="bb-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: cols }}>
           {/* header row */}
           <div style={{ borderBottom: "1px solid var(--border)" }} />
           {days.map((d) => {
             const isToday = fmtDateKey(d) === todayKey;
             const closed = weeklyHours[d.getDay()]?.closed;
+            const narrow = isNarrow(d);
             return (
-              <div key={fmtDateKey(d)} style={{ textAlign: "center", padding: "8px 2px", borderBottom: "1px solid var(--border)", borderRight: "1px solid var(--border)", background: isToday ? "var(--gold-wash)" : "transparent", opacity: closed ? 0.45 : 1 }}>
-                <div style={{ fontSize: 10.5, color: isToday ? "var(--gold-bright)" : "var(--muted)" }}>{DOW_HE[d.getDay()]}</div>
-                <div className="bb-serif" style={{ fontSize: 15, fontWeight: 700, color: isToday ? "var(--gold-bright)" : "var(--cream)" }}>{d.getDate()}</div>
+              <div key={fmtDateKey(d)} style={{ textAlign: "center", padding: "6px 0", borderBottom: "1px solid var(--border)", borderRight: "1px solid var(--border)", background: isToday ? "var(--gold-wash)" : "transparent", opacity: closed ? 0.45 : 1, minWidth: 0 }}>
+                <div style={{ fontSize: narrow ? 9 : 10.5, color: isToday ? "var(--gold-bright)" : "var(--muted)" }}>{narrow ? DOW_HE[d.getDay()].slice(0, 1) : DOW_HE[d.getDay()]}</div>
+                {!narrow && <div className="bb-serif" style={{ fontSize: 14, fontWeight: 700, color: isToday ? "var(--gold-bright)" : "var(--cream)" }}>{d.getDate()}</div>}
               </div>
             );
           })}
 
           {/* time gutter */}
-          <div style={{ position: "relative", height: hours.length * HOUR_PX }}>
+          <div ref={gridRef} style={{ position: "relative", height: hours.length * HOUR_PX }}>
             {hours.map((h, i) => (
-              <div key={h} className="bb-mono-num" style={{ position: "absolute", top: i * HOUR_PX - 7, left: 0, right: 4, textAlign: "left", fontSize: 10, color: "var(--muted-dim)", direction: "ltr" }}>
-                {String(h).padStart(2, "0")}:00
+              <div key={h} className="bb-mono-num" style={{ position: "absolute", top: i * HOUR_PX - (i === 0 ? 0 : 6), left: 0, right: 3, textAlign: "left", fontSize: 9.5, color: "var(--muted-dim)", direction: "ltr" }}>
+                {String(h).padStart(2, "0")}
               </div>
             ))}
           </div>
@@ -2299,9 +2895,19 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
             const key = fmtDateKey(d);
             const isToday = key === todayKey;
             const closed = weeklyHours[d.getDay()]?.closed;
-            const dayAppts = appointments.filter((a) => a.date === key && a.status !== "cancelled");
+            const dayAppts = weekAppts.filter((a) => a.date === key);
             return (
-              <div key={key} style={{ position: "relative", height: hours.length * HOUR_PX, borderRight: "1px solid var(--border)", background: closed ? "repeating-linear-gradient(45deg, transparent, transparent 6px, var(--bg-elevated) 6px, var(--bg-elevated) 8px)" : isToday ? "rgba(198,161,91,0.03)" : "transparent" }}>
+              <div key={key}
+                onClick={(e) => {
+                  if (!onCreateAt) return;
+                  const y = e.clientY - e.currentTarget.getBoundingClientRect().top;
+                  let mins = gridStartMin + Math.floor(((y / HOUR_PX) * 60) / SLOT_MINUTES) * SLOT_MINUTES;
+                  mins = Math.max(gridStartMin, Math.min(mins, maxHour * 60 - SLOT_MINUTES));
+                  const t = `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+                  vibrate(10);
+                  onCreateAt(key, t);
+                }}
+                style={{ position: "relative", minWidth: 0, height: hours.length * HOUR_PX, borderRight: "1px solid var(--border)", cursor: onCreateAt ? "copy" : "default", background: closed ? "repeating-linear-gradient(45deg, transparent, transparent 6px, var(--bg-elevated) 6px, var(--bg-elevated) 8px)" : isToday ? "rgba(198,161,91,0.03)" : "transparent" }}>
                 {hours.map((h, i) => (
                   <div key={h} style={{ position: "absolute", top: i * HOUR_PX, left: 0, right: 0, borderTop: "1px solid var(--border)", opacity: 0.5 }} />
                 ))}
@@ -2314,25 +2920,26 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
                   const startMin = timeToMinutes(a.time);
                   const dur = a.duration || DEFAULT_APPT_DURATION;
                   const top = ((startMin - gridStartMin) / 60) * HOUR_PX;
-                  const height = Math.max((dur / 60) * HOUR_PX - 2, 20);
+                  const height = Math.max((dur / 60) * HOUR_PX - 2, 16);
                   const c = WEEK_STATUS_COLORS[a.status] || WEEK_STATUS_COLORS.confirmed;
                   return (
                     <div
                       key={a.id}
-                      onClick={() => onSelect(a)}
+                      onClick={(e) => { e.stopPropagation(); onSelect(a); }}
                       title={`${a.clientName} · ${a.serviceName} · ${a.time}`}
                       style={{
-                        position: "absolute", top, right: 2, left: 2, height,
-                        background: c.bg, borderRight: `3px solid ${c.border}`, borderRadius: 7,
-                        padding: "3px 6px", cursor: "pointer", overflow: "hidden", zIndex: 2,
+                        position: "absolute", top, right: 1, left: 1, height,
+                        background: c.bg, borderRight: `3px solid ${c.border}`, borderRadius: 5,
+                        padding: "1px 3px", cursor: "pointer", overflow: "hidden", zIndex: 2,
+                        display: "flex", flexDirection: "column", justifyContent: "center",
                       }}
                     >
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: c.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {a.clientName}
+                      <div style={{ fontSize: 10, fontWeight: 700, lineHeight: 1.15, color: c.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {(a.clientName || "").trim().split(/\s+/)[0]}
                       </div>
-                      {height > 34 && (
-                        <div style={{ fontSize: 9.5, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {a.time} · {a.serviceName}
+                      {height > 28 && (
+                        <div className="bb-mono-num" style={{ fontSize: 9, lineHeight: 1.15, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden" }}>
+                          {a.time}
                         </div>
                       )}
                     </div>
@@ -2344,7 +2951,10 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 14, marginTop: 10, flexWrap: "wrap", justifyContent: "center" }}>
+      {onCreateAt && (
+        <div style={{ textAlign: "center", fontSize: 11, color: "var(--muted-dim)", marginTop: 6 }}>לחיצה על מקום ריק ביומן = תור חדש באותה שעה</div>
+      )}
+      <div style={{ display: "flex", gap: 14, marginTop: 6, flexWrap: "wrap", justifyContent: "center" }}>
         {Object.entries({ confirmed: "מאושר", pending: "ממתין", done: "הושלם" }).map(([s, label]) => (
           <span key={s} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--muted)" }}>
             <span style={{ width: 9, height: 9, borderRadius: 3, background: WEEK_STATUS_COLORS[s].border }} /> {label}
@@ -2356,17 +2966,18 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
 }
 
 /* ---------- FULL MANUAL EDIT — every field on an appointment, one button away ---------- */
-function EditAppointmentModal({ appt, services, clients = [], onSave, onClose }) {
+function EditAppointmentModal({ appt, initial = null, services, clients = [], onSave, onClose }) {
   const isCreate = !appt;
   const [selectedClientId, setSelectedClientId] = useState("");
+  const defaultSvc = services.find((s) => (s.name || "").trim() === "תספורת גבר") || services[0];
   const [form, setForm] = useState({
     clientName: appt?.clientName || "",
     phone: appt?.phone || "",
-    serviceId: appt?.serviceId || services[0]?.id || "",
-    date: appt?.date || fmtDateKey(defaultWorkDate()),
-    time: appt?.time || "10:00",
+    serviceId: appt?.serviceId || defaultSvc?.id || "",
+    date: appt?.date || initial?.date || fmtDateKey(defaultWorkDate()),
+    time: appt?.time || initial?.time || "10:00",
     duration: appt?.duration ?? DEFAULT_APPT_DURATION,
-    price: appt?.price ?? (services[0]?.price ?? 0),
+    price: appt?.price ?? (defaultSvc?.price ?? 0),
     status: appt?.status || "confirmed",
   });
   const [errors, setErrors] = useState({});
@@ -2440,7 +3051,7 @@ function EditAppointmentModal({ appt, services, clients = [], onSave, onClose })
         />
         {showSuggest && nameSuggestions.length > 0 && (
           <div style={{ marginTop: 6, background: "var(--bg-card)", border: "1.5px solid var(--border)", borderRadius: 10, maxHeight: 220, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
-            <div style={{ fontSize: 11, color: "var(--muted)", padding: "6px 12px 2px" }}>{nameSuggestions.length} לקוחות נמצאו</div>
+            <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 12px 2px" }}>{nameSuggestions.length} לקוחות נמצאו</div>
             {nameSuggestions.map((c) => (
               <div
                 key={c.id}
@@ -2570,7 +3181,7 @@ function JournalTab({ journalEntries, setJournalEntries, pushToast, undoStash, l
                 <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
                   {e.date} · {e.time} · {e.duration} דק׳{e.phone ? ` · ${e.phone}` : ""}
                 </div>
-                {e.note && <div style={{ fontSize: 11.5, color: "var(--muted-dim)", marginTop: 3 }}>{e.note}</div>}
+                {e.note && <div style={{ fontSize: 12.5, color: "var(--muted-dim)", marginTop: 3 }}>{e.note}</div>}
               </div>
               <button className="bb-icon-btn" onClick={() => openEdit(e)}><Pencil size={15} /></button>
               <button className="bb-icon-btn" onClick={() => del(e)}><Trash2 size={15} color="var(--danger)" /></button>
@@ -2791,7 +3402,7 @@ function ClientsTab({ clients, setClients, appointments, journalEntries, setJour
             </div>
           )}
           {modal === "add" && form.date && (
-            <div style={{ fontSize: 11.5, color: "var(--muted-dim)", marginTop: -8, marginBottom: 14 }}>
+            <div style={{ fontSize: 12.5, color: "var(--muted-dim)", marginTop: -8, marginBottom: 14 }}>
               רשומה תיווצר גם ביומן עבור המועד הזה
             </div>
           )}
@@ -2986,7 +3597,7 @@ function HoursTab({ weeklyHours, setWeeklyHours, appointments, pushToast, logAct
 
       {conflictModal && (
         <Modal onClose={() => setConflictModal(null)} title="התנגשות עם תורים קיימים">
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "var(--warning-wash)", border: "1px solid rgba(209,168,92,0.3)", borderRadius: 12, padding: 12, marginBottom: 14 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "var(--warning-wash)", border: "1px solid var(--warning-wash)", borderRadius: 12, padding: 12, marginBottom: 14 }}>
             <AlertTriangle size={16} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
             <div style={{ fontSize: 13, color: "var(--warning)" }}>
               יש {conflictModal.conflicts.length} תורים קיימים ביום {DOW_FULL_HE[conflictModal.day]} שיוצאים מחוץ לשעות החדשות. יש לטפל בהם לפני השינוי.
@@ -3025,7 +3636,7 @@ function ActivityTab({ activityLog }) {
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--gold-dim)", flexShrink: 0 }} />
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13.5 }}>{a.action}</div>
-                <div style={{ fontSize: 11.5, color: "var(--muted-dim)", marginTop: 2 }}>
+                <div style={{ fontSize: 12.5, color: "var(--muted-dim)", marginTop: 2 }}>
                   {new Date(a.ts).toLocaleString("he-IL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                 </div>
               </div>
@@ -3147,7 +3758,7 @@ function SettingsTab({ notificationLog, adminEmail, setAdminEmail, themeId, setT
               }}
             >
               <div style={{ width: 28, height: 28, borderRadius: "50%", background: t.swatch, boxShadow: themeId === id ? "0 0 0 3px var(--gold-wash)" : "none" }} />
-              <span style={{ fontSize: 11, color: themeId === id ? "var(--gold-bright)" : "var(--muted)", textAlign: "center" }}>{t.label}</span>
+              <span style={{ fontSize: 12, color: themeId === id ? "var(--gold-bright)" : "var(--muted)", textAlign: "center" }}>{t.label}</span>
             </button>
           ))}
         </div>
@@ -3172,7 +3783,7 @@ function SettingsTab({ notificationLog, adminEmail, setAdminEmail, themeId, setT
             <MessageCircle size={16} color="var(--muted)" />
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13.5 }}>{n.type}</div>
-              <div style={{ fontSize: 11.5, color: "var(--muted-dim)", marginTop: 2 }}>
+              <div style={{ fontSize: 12.5, color: "var(--muted-dim)", marginTop: 2 }}>
                 {n.recipient} · {new Date(n.ts).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}
               </div>
             </div>
