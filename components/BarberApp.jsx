@@ -91,6 +91,7 @@ const CSS = `
   --on-accent-2: #0B0A0D;
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
   --series-4: #c98500; --series-5: #d55181; --series-6: #0ca30c; --series-7: #9085e9;
+  --exp-1: #E5675B; --exp-2: #B9473D; --exp-3: #F29A8F; --exp-4: #8E352E; --exp-5: #F6C3BC; --exp-6: #D4846F;
   --topbar-bg: rgba(11,10,13,0.92);
   --r-sm: 10px;
   --r-md: 12px;
@@ -667,6 +668,7 @@ const THEMES = {
       "--accent-2": "#1F6FB2", "--on-accent-2": "#FFFFFF",
       "--series-1": "#2a78d6", "--series-2": "#eb6834", "--series-3": "#1baf7a",
       "--series-4": "#eda100", "--series-5": "#e87ba4", "--series-6": "#008300", "--series-7": "#6250d6",
+      "--exp-1": "#C8443A", "--exp-2": "#8F2C25", "--exp-3": "#E58A80", "--exp-4": "#6B211C", "--exp-5": "#F0B4AC", "--exp-6": "#B8644F",
     },
   },
   copper: {
@@ -2521,7 +2523,7 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
 const MONTHS_HE_SHORT = ["ינו׳", "פבר׳", "מרץ", "אפר׳", "מאי", "יוני", "יולי", "אוג׳", "ספט׳", "אוק׳", "נוב׳", "דצמ׳"];
 const MONTHS_HE_FULL = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
 // colour follows the category (fixed order), never its rank
-const EXPENSE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-7)"];
+const EXPENSE_COLORS = ["var(--exp-1)", "var(--exp-2)", "var(--exp-3)", "var(--exp-4)", "var(--exp-5)", "var(--exp-6)"];
 const fmtILS = (n) => `₪${Math.round(n).toLocaleString("he-IL")}`;
 function monthKeyOf(dateStr) { return (dateStr || "").slice(0, 7); } // "YYYY-MM"
 function monthLabel(key, full) {
@@ -2529,8 +2531,10 @@ function monthLabel(key, full) {
   return full ? `${MONTHS_HE_FULL[m - 1]} ${y}` : MONTHS_HE_SHORT[m - 1];
 }
 
-/* grouped bars: revenue vs expenses per month — tap a month to filter the whole tab */
+/* grouped bars: revenue vs expenses per month.
+   Tap / hover a bar -> small window with the amount. Tap the month name -> filter the tab to that month. */
 function MonthlyBars({ months, selected, onSelect }) {
+  const [tip, setTip] = useState(null); // { key, kind: "revenue" | "expenses" }
   const W = 340, H = 170, padB = 24, padT = 10, padX = 4, padL = 40; // left gutter holds the ₪ axis labels
   const max = Math.max(1, ...months.map((m) => Math.max(m.revenue, m.expenses)));
   const nice = (() => { const p = Math.pow(10, Math.floor(Math.log10(max))); return Math.ceil(max / p) * p; })();
@@ -2538,44 +2542,85 @@ function MonthlyBars({ months, selected, onSelect }) {
   const slot = (W - padL - padX) / months.length;
   const barW = Math.min(18, (slot - 14) / 2);
   const y = (v) => padT + plotH - (v / nice) * plotH;
-  const bar = (x, v, color, dim) => {
+  const barPath = (x, v) => {
     const h = (v / nice) * plotH;
     if (h <= 0) return null;
     const r = Math.min(4, h);
     const top = padT + plotH - h, base = padT + plotH;
-    // rounded data-end, square baseline
-    const d = `M${x},${base} L${x},${top + r} Q${x},${top} ${x + r},${top} L${x + barW - r},${top} Q${x + barW},${top} ${x + barW},${top + r} L${x + barW},${base} Z`;
-    return <path d={d} fill={color} opacity={dim ? 0.35 : 1} />;
+    return `M${x},${base} L${x},${top + r} Q${x},${top} ${x + r},${top} L${x + barW - r},${top} Q${x + barW},${top} ${x + barW},${top + r} L${x + barW},${base} Z`;
   };
+  const tipMonth = tip && months.find((m) => m.key === tip.key);
+  let tipPos = null;
+  if (tipMonth) {
+    const i = months.indexOf(tipMonth);
+    const cx = padL + slot * i + slot / 2;
+    const x = tip.kind === "revenue" ? cx - barW / 2 - 1 : cx + barW / 2 + 1;
+    const v = tip.kind === "revenue" ? tipMonth.revenue : tipMonth.expenses;
+    tipPos = { left: (x / W) * 100, top: (Math.min(y(v), padT + plotH - 4) / H) * 100, v };
+  }
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", direction: "ltr" }} role="img" aria-label="הכנסות והוצאות לפי חודש">
-      {[0.5, 1].map((f) => (
-        <g key={f}>
-          <line x1={padL} x2={W - padX} y1={y(nice * f)} y2={y(nice * f)} stroke="var(--border)" strokeDasharray="3 4" />
-          <text x={padL - 5} y={y(nice * f) + 3.5} textAnchor="end" fontSize="9.5" fill="var(--muted-dim)" fontFamily="Heebo">{fmtILS(nice * f)}</text>
-        </g>
-      ))}
-      <line x1={padL} x2={W - padX} y1={padT + plotH} y2={padT + plotH} stroke="var(--border-light)" />
-      {months.map((m, i) => {
-        const cx = padL + slot * i + slot / 2;
-        const dim = selected && selected !== m.key;
-        const isSel = selected === m.key;
-        return (
-          <g key={m.key} onClick={() => onSelect(isSel ? null : m.key)} style={{ cursor: "pointer" }}>
-            <title>{`${monthLabel(m.key, true)} · הכנסות ${fmtILS(m.revenue)} · הוצאות ${fmtILS(m.expenses)}`}</title>
-            <rect x={padL + slot * i} y={0} width={slot} height={H} fill={isSel ? "var(--gold-wash)" : "transparent"} rx="6" />
-            {bar(cx - barW - 1, m.revenue, "var(--success)", dim)}
-            {bar(cx + 1, m.expenses, "var(--danger)", dim)}
-            <text x={cx} y={H - 7} textAnchor="middle" fontSize="11" fontFamily="Heebo" fontWeight={isSel ? 700 : 400} fill={isSel ? "var(--cream)" : "var(--muted)"}>{monthLabel(m.key)}</text>
+    <div style={{ position: "relative" }} onPointerLeave={(e) => { if (e.pointerType === "mouse") setTip(null); }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", direction: "ltr", touchAction: "manipulation" }} role="img" aria-label="הכנסות והוצאות לפי חודש"
+        onClick={() => setTip(null)}>
+        {[0.5, 1].map((f) => (
+          <g key={f}>
+            <line x1={padL} x2={W - padX} y1={y(nice * f)} y2={y(nice * f)} stroke="var(--border)" strokeDasharray="3 4" />
+            <text x={padL - 5} y={y(nice * f) + 3.5} textAnchor="end" fontSize="9.5" fill="var(--muted-dim)" fontFamily="Heebo">{fmtILS(nice * f)}</text>
           </g>
-        );
-      })}
-    </svg>
+        ))}
+        <line x1={padL} x2={W - padX} y1={padT + plotH} y2={padT + plotH} stroke="var(--border-light)" />
+        {months.map((m, i) => {
+          const cx = padL + slot * i + slot / 2;
+          const dim = selected && selected !== m.key;
+          const isSel = selected === m.key;
+          const kinds = [
+            { kind: "revenue", x: cx - barW - 1, v: m.revenue, color: "var(--success)" },
+            { kind: "expenses", x: cx + 1, v: m.expenses, color: "var(--danger)" },
+          ];
+          return (
+            <g key={m.key} className="bb-bar-month">
+              <rect x={padL + slot * i} y={0} width={slot} height={H} fill={isSel ? "var(--gold-wash)" : "transparent"} rx="6" />
+              {kinds.map((k) => {
+                const d = barPath(k.x, k.v);
+                const active = tip && tip.key === m.key && tip.kind === k.kind;
+                return (
+                  <g key={k.kind}
+                    onPointerEnter={(e) => { if (e.pointerType === "mouse") setTip({ key: m.key, kind: k.kind }); }}
+                    onClick={(e) => { e.stopPropagation(); setTip({ key: m.key, kind: k.kind }); }}
+                    style={{ cursor: "pointer" }}>
+                    {/* invisible hit area — wider and taller than the bar, easy to tap */}
+                    <rect x={k.x - 3} y={padT} width={barW + 6} height={plotH} fill="transparent" />
+                    {d && <path d={d} fill={k.color} opacity={dim && !active ? 0.35 : 1} stroke={active ? "var(--cream)" : "none"} strokeWidth="1.5" />}
+                  </g>
+                );
+              })}
+              <text x={cx} y={H - 7} textAnchor="middle" fontSize="11" fontFamily="Heebo" fontWeight={isSel ? 700 : 400}
+                fill={isSel ? "var(--cream)" : "var(--muted)"} style={{ cursor: "pointer" }}
+                onClick={(e) => { e.stopPropagation(); setTip(null); onSelect(isSel ? null : m.key); }}>{monthLabel(m.key)}</text>
+            </g>
+          );
+        })}
+      </svg>
+      {tipMonth && tipPos && (
+        <div role="status" style={{
+          position: "absolute", left: `${tipPos.left}%`, top: `${tipPos.top}%`, transform: "translate(-50%, calc(-100% - 8px))",
+          background: "var(--bg-elevated)", border: `1.5px solid ${tip.kind === "revenue" ? "var(--success)" : "var(--danger)"}`,
+          borderRadius: 10, padding: "7px 10px", boxShadow: "0 6px 20px rgba(0,0,0,0.35)", pointerEvents: "none",
+          whiteSpace: "nowrap", zIndex: 5, textAlign: "center",
+        }}>
+          <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{monthLabel(tipMonth.key, true)} · {tip.kind === "revenue" ? "הכנסות" : "הוצאות"}</div>
+          <div className="bb-mono-num" style={{ fontSize: 17, fontWeight: 800, color: "var(--cream)" }}>{fmtILS(tipPos.v)}</div>
+          <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
+            {tip.kind === "revenue" ? `${tipMonth.revenueCount} תורים ששולמו` : `${tipMonth.expenseCount} הוצאות`}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 /* donut: expenses by category, with a legend that always shows amount + % */
-function ExpenseDonut({ rows, total }) {
+function ExpenseDonut({ rows, total, centerLabel = "סה״כ הוצאות", centerValue = null }) {
   const [hover, setHover] = useState(null);
   const R = 62, T = 20, C = 2 * Math.PI * R;
   let acc = 0;
@@ -2599,8 +2644,8 @@ function ExpenseDonut({ rows, total }) {
             return el;
           })}
         </g>
-        <text x="80" y="76" textAnchor="middle" fontSize="11" fill="var(--muted)" fontFamily="Heebo">{shown ? shown.cat : "סה״כ הוצאות"}</text>
-        <text x="80" y="96" textAnchor="middle" fontSize="17" fontWeight="800" fill="var(--cream)" fontFamily="Heebo">{fmtILS(shown ? shown.amount : total)}</text>
+        <text x="80" y="76" textAnchor="middle" fontSize="11" fill="var(--muted)" fontFamily="Heebo">{shown ? shown.cat : centerLabel}</text>
+        <text x="80" y="96" textAnchor="middle" fontSize="17" fontWeight="800" fill="var(--cream)" fontFamily="Heebo">{shown ? fmtILS(shown.amount) : (centerValue !== null ? (centerValue < 0 ? "-" : "") + fmtILS(Math.abs(centerValue)) : fmtILS(total))}</text>
       </svg>
       <div style={{ flex: "1 1 160px", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
         {rows.map((r) => (
@@ -2630,11 +2675,17 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
       const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     });
-    return keys.map((key) => ({
-      key,
-      revenue: appointments.filter((a) => a.status === "done" && monthKeyOf(a.date) === key).reduce((s2, a) => s2 + (Number(a.price) || 0), 0),
-      expenses: expenses.filter((e) => monthKeyOf(e.date) === key).reduce((s2, e) => s2 + (Number(e.amount) || 0), 0),
-    }));
+    return keys.map((key) => {
+      const done = appointments.filter((a) => a.status === "done" && monthKeyOf(a.date) === key);
+      const exps = expenses.filter((e) => monthKeyOf(e.date) === key);
+      return {
+        key,
+        revenue: done.reduce((s2, a) => s2 + (Number(a.price) || 0), 0),
+        revenueCount: done.length,
+        expenses: exps.reduce((s2, e) => s2 + (Number(e.amount) || 0), 0),
+        expenseCount: exps.length,
+      };
+    });
   }, [appointments, expenses]);
 
   const inMonth = (dateStr) => !month || monthKeyOf(dateStr) === month;
@@ -2741,6 +2792,23 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
             הכנסות צפויות מתורים עתידיים (טרם בוצעו): <b style={{ color: "var(--cream)" }}>₪{pipelineRevenue}</b>
           </span>
         </div>
+
+        <SectionTitle title={`הכנסות מול הוצאות${month ? " · " + monthLabel(month, true) : ""}`} />
+        {totalRevenue + totalExpenses === 0 ? (
+          <EmptyState icon={CircleDollarSign} title="אין עדיין נתונים לתקופה הזו" subtitle="תורים ששולמו והוצאות שתוסיפו יופיעו כאן" />
+        ) : (
+          <div className="bb-card">
+            <ExpenseDonut
+              rows={[
+                { cat: "הכנסות", color: "var(--success)", amount: totalRevenue },
+                { cat: "הוצאות", color: "var(--danger)", amount: totalExpenses },
+              ].filter((r) => r.amount > 0)}
+              total={totalRevenue + totalExpenses}
+              centerLabel={netProfit >= 0 ? "רווח" : "הפסד"}
+              centerValue={netProfit}
+            />
+          </div>
+        )}
 
         <SectionTitle title={`פילוח הוצאות${month ? " · " + monthLabel(month, true) : ""}`} />
         {expenseRows.length === 0 ? (
