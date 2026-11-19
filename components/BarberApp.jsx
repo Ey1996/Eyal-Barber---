@@ -199,6 +199,8 @@ const CSS = `
 .bb-admin-tabs::-webkit-scrollbar { display: none; }
 .bb-admin-tab { display: flex; align-items: center; gap: 6px; padding: 8px 14px; min-height: var(--tap); border-radius: var(--r-sm); background: transparent; border: none; color: var(--muted); font-family: 'Heebo'; font-size: 14.5px; cursor: pointer; white-space: nowrap; transition: all .15s; }
 .bb-admin-tab.active { background: var(--gold-wash); color: var(--gold-bright); font-weight: 600; }
+.bb-wk-col { container-type: inline-size; }
+@container (max-width: 74px) { .bb-wk-time { display: none; } }
 .bb-tab-count { background: var(--warning); color: var(--on-gold); border-radius: 10px; font-size: 11.5px; font-weight: 800; min-width: 20px; height: 20px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; }
 .bb-pay-row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); min-height: 68px; }
 .bb-pay-row:last-child { border-bottom: none; }
@@ -2795,22 +2797,26 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
   const weekKeys = days.map(fmtDateKey);
   const weekAppts = appointments.filter((a) => weekKeys.includes(a.date) && a.status !== "cancelled");
 
-  // visible hour range: earliest opening → latest closing across the week,
-  // widened to include any appointment booked outside opening hours
+  // visible hour range: only the hours this week actually uses (1h margin each side),
+  // so 20-min appointments get real height. An empty week falls back to opening hours.
   let minHour = 24, maxHour = 0;
-  Object.values(weeklyHours || {}).forEach((h) => {
-    if (h && !h.closed) {
-      minHour = Math.min(minHour, Math.floor(timeToMinutes(h.open) / 60));
-      maxHour = Math.max(maxHour, Math.ceil(timeToMinutes(h.close) / 60));
-    }
-  });
   weekAppts.forEach((a) => {
     const s = timeToMinutes(a.time);
-    const e = s + (a.duration || DEFAULT_APPT_DURATION);
-    minHour = Math.min(minHour, Math.floor(s / 60));
-    maxHour = Math.max(maxHour, Math.ceil(e / 60));
+    const e = s + (Number(a.duration) || DEFAULT_APPT_DURATION);
+    minHour = Math.min(minHour, Math.floor(s / 60) - 1);
+    maxHour = Math.max(maxHour, Math.ceil(e / 60) + 1);
   });
+  if (!weekAppts.length) {
+    Object.values(weeklyHours || {}).forEach((h) => {
+      if (h && !h.closed) {
+        minHour = Math.min(minHour, Math.floor(timeToMinutes(h.open) / 60));
+        maxHour = Math.max(maxHour, Math.ceil(timeToMinutes(h.close) / 60));
+      }
+    });
+  }
   if (minHour >= maxHour) { minHour = 8; maxHour = 21; }
+  minHour = Math.max(0, minHour);
+  maxHour = Math.min(24, Math.max(maxHour, minHour + 4)); // at least 4 hours visible
   const hours = Array.from({ length: maxHour - minHour }, (_, i) => minHour + i);
   const gridStartMin = minHour * 60;
 
@@ -2825,7 +2831,9 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
       const top = el.getBoundingClientRect().top;
       const avail = window.innerHeight - top - 44 - 34; // day header row + legend/margin
       const px = Math.floor(avail / Math.max(hours.length, 1));
-      setHourPx(Math.max(24, Math.min(56, px)));
+      // 60px/hour = 20px per 20-min appointment: enough for one clear line.
+      // If the week is too long to fit, the grid scrolls a bit instead of stacking names.
+      setHourPx(Math.max(60, Math.min(80, px)));
     }
     fit();
     window.addEventListener("resize", fit);
@@ -2907,6 +2915,7 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
                   vibrate(10);
                   onCreateAt(key, t);
                 }}
+                className="bb-wk-col"
                 style={{ position: "relative", minWidth: 0, height: hours.length * HOUR_PX, borderRight: "1px solid var(--border)", cursor: onCreateAt ? "copy" : "default", background: closed ? "repeating-linear-gradient(45deg, transparent, transparent 6px, var(--bg-elevated) 6px, var(--bg-elevated) 8px)" : isToday ? "rgba(198,161,91,0.03)" : "transparent" }}>
                 {hours.map((h, i) => (
                   <div key={h} style={{ position: "absolute", top: i * HOUR_PX, left: 0, right: 0, borderTop: "1px solid var(--border)", opacity: 0.5 }} />
@@ -2918,9 +2927,9 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
                 )}
                 {dayAppts.map((a) => {
                   const startMin = timeToMinutes(a.time);
-                  const dur = a.duration || DEFAULT_APPT_DURATION;
-                  const top = ((startMin - gridStartMin) / 60) * HOUR_PX;
-                  const height = Math.max((dur / 60) * HOUR_PX - 2, 16);
+                  const dur = Number(a.duration) || DEFAULT_APPT_DURATION;
+                  const top = ((startMin - gridStartMin) / 60) * HOUR_PX + 1;
+                  const height = Math.max((dur / 60) * HOUR_PX - 2, 14); // 2px gap: back-to-back appointments never touch
                   const c = WEEK_STATUS_COLORS[a.status] || WEEK_STATUS_COLORS.confirmed;
                   return (
                     <div
@@ -2930,18 +2939,16 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
                       style={{
                         position: "absolute", top, right: 1, left: 1, height,
                         background: c.bg, borderRight: `3px solid ${c.border}`, borderRadius: 5,
-                        padding: "1px 3px", cursor: "pointer", overflow: "hidden", zIndex: 2,
-                        display: "flex", flexDirection: "column", justifyContent: "center",
+                        padding: "0 4px", cursor: "pointer", overflow: "hidden", zIndex: 2,
+                        display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
                       }}
                     >
-                      <div style={{ fontSize: 10, fontWeight: 700, lineHeight: 1.15, color: c.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: c.text, overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
                         {(a.clientName || "").trim().split(/\s+/)[0]}
-                      </div>
-                      {height > 28 && (
-                        <div className="bb-mono-num" style={{ fontSize: 9, lineHeight: 1.15, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden" }}>
-                          {a.time}
-                        </div>
-                      )}
+                      </span>
+                      <span className="bb-mono-num bb-wk-time" style={{ fontSize: 10.5, color: "var(--muted)", flexShrink: 0, marginInlineStart: "auto" }}>
+                        {a.time}
+                      </span>
                     </div>
                   );
                 })}
