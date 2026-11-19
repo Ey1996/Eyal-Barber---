@@ -87,6 +87,10 @@ const CSS = `
   --muted: #A69C8D;
   --muted-dim: #8C8274;
   --on-gold: #1a1509;
+  --accent-2: #5AA9E6;
+  --on-accent-2: #0B0A0D;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --series-4: #c98500; --series-5: #d55181; --series-6: #0ca30c; --series-7: #9085e9;
   --topbar-bg: rgba(11,10,13,0.92);
   --r-sm: 10px;
   --r-md: 12px;
@@ -201,6 +205,8 @@ const CSS = `
 .bb-admin-tab.active { background: var(--gold-wash); color: var(--gold-bright); font-weight: 600; }
 .bb-wk-col { container-type: inline-size; }
 @container (max-width: 74px) { .bb-wk-time { display: none; } }
+.bb-admin-tab.accent { color: var(--accent-2); font-weight: 700; box-shadow: inset 0 0 0 1.5px var(--accent-2); margin: 0 2px; }
+.bb-admin-tab.accent.active { background: var(--accent-2); color: var(--on-accent-2); box-shadow: none; }
 .bb-tab-count { background: var(--warning); color: var(--on-gold); border-radius: 10px; font-size: 11.5px; font-weight: 800; min-width: 20px; height: 20px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; }
 .bb-pay-row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); min-height: 68px; }
 .bb-pay-row:last-child { border-bottom: none; }
@@ -220,6 +226,9 @@ const CSS = `
 /* ---------- generic table-ish rows ---------- */
 .bb-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); gap: 12px; min-height: 64px; }
 @media (max-width: 440px) {
+  .bb-client-row { gap: 6px; padding: 12px 10px 12px 6px; }
+  .bb-client-row .bb-avatar { display: none; }
+  .bb-client-row .bb-icon-btn { min-width: 34px; }
   .bb-row[class*="st-"] { gap: 8px; padding: 12px 12px 12px 8px; }
   .bb-row[class*="st-"] .bb-avatar { display: none; }
   .bb-row[class*="st-"] .bb-icon-btn { min-width: 36px; }
@@ -655,6 +664,9 @@ const THEMES = {
       "--danger": "#B0463A", "--danger-wash": "rgba(176, 70, 58, 0.09)",
       "--warning": "#A85A14", "--warning-wash": "rgba(168, 90, 20, 0.1)",
       "--on-gold": "#FFFFFF", "--topbar-bg": "rgba(244, 240, 232, 0.92)",
+      "--accent-2": "#1F6FB2", "--on-accent-2": "#FFFFFF",
+      "--series-1": "#2a78d6", "--series-2": "#eb6834", "--series-3": "#1baf7a",
+      "--series-4": "#eda100", "--series-5": "#e87ba4", "--series-6": "#008300", "--series-7": "#6250d6",
     },
   },
   copper: {
@@ -1815,10 +1827,10 @@ function SummaryRow({ icon: Icon, label, value }) {
    ============================================================================ */
 const ADMIN_TABS = [
   { id: "dashboard", label: "דשבורד", icon: Home },
-  { id: "finance", label: "כספים", icon: Wallet },
-  { id: "appointments", label: "תורים", icon: CalendarClock },
+  { id: "appointments", label: "תורים", icon: CalendarClock, accent: true },
   { id: "unpaid", label: "לתשלום", icon: Banknote },
   { id: "journal", label: "יומן", icon: BookOpen },
+  { id: "finance", label: "כספים", icon: Wallet },
   { id: "clients", label: "לקוחות", icon: Users },
   { id: "services", label: "שירותים", icon: Scissors },
   { id: "hours", label: "שעות פעילות", icon: Clock },
@@ -1962,7 +1974,7 @@ function AdminView(props) {
 
       <div className="bb-admin-tabs">
         {ADMIN_TABS.map((t) => (
-          <button key={t.id} className={`bb-admin-tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+          <button key={t.id} className={`bb-admin-tab ${tab === t.id ? "active" : ""} ${t.accent ? "accent" : ""}`} onClick={() => setTab(t.id)}>
             <t.icon size={15} /> {t.label}
             {t.id === "unpaid" && overdueUnpaidCount > 0 && (
               <span className="bb-tab-count">{overdueUnpaidCount}</span>
@@ -2506,16 +2518,135 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
 }
 
 /* ---------- FINANCE — revenue, expenses, and where the money actually comes from ---------- */
+const MONTHS_HE_SHORT = ["ינו׳", "פבר׳", "מרץ", "אפר׳", "מאי", "יוני", "יולי", "אוג׳", "ספט׳", "אוק׳", "נוב׳", "דצמ׳"];
+const MONTHS_HE_FULL = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+// colour follows the category (fixed order), never its rank
+const EXPENSE_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)", "var(--series-7)"];
+const fmtILS = (n) => `₪${Math.round(n).toLocaleString("he-IL")}`;
+function monthKeyOf(dateStr) { return (dateStr || "").slice(0, 7); } // "YYYY-MM"
+function monthLabel(key, full) {
+  const [y, m] = key.split("-").map(Number);
+  return full ? `${MONTHS_HE_FULL[m - 1]} ${y}` : MONTHS_HE_SHORT[m - 1];
+}
+
+/* grouped bars: revenue vs expenses per month — tap a month to filter the whole tab */
+function MonthlyBars({ months, selected, onSelect }) {
+  const W = 340, H = 170, padB = 24, padT = 10, padX = 4, padL = 40; // left gutter holds the ₪ axis labels
+  const max = Math.max(1, ...months.map((m) => Math.max(m.revenue, m.expenses)));
+  const nice = (() => { const p = Math.pow(10, Math.floor(Math.log10(max))); return Math.ceil(max / p) * p; })();
+  const plotH = H - padB - padT;
+  const slot = (W - padL - padX) / months.length;
+  const barW = Math.min(18, (slot - 14) / 2);
+  const y = (v) => padT + plotH - (v / nice) * plotH;
+  const bar = (x, v, color, dim) => {
+    const h = (v / nice) * plotH;
+    if (h <= 0) return null;
+    const r = Math.min(4, h);
+    const top = padT + plotH - h, base = padT + plotH;
+    // rounded data-end, square baseline
+    const d = `M${x},${base} L${x},${top + r} Q${x},${top} ${x + r},${top} L${x + barW - r},${top} Q${x + barW},${top} ${x + barW},${top + r} L${x + barW},${base} Z`;
+    return <path d={d} fill={color} opacity={dim ? 0.35 : 1} />;
+  };
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", direction: "ltr" }} role="img" aria-label="הכנסות והוצאות לפי חודש">
+      {[0.5, 1].map((f) => (
+        <g key={f}>
+          <line x1={padL} x2={W - padX} y1={y(nice * f)} y2={y(nice * f)} stroke="var(--border)" strokeDasharray="3 4" />
+          <text x={padL - 5} y={y(nice * f) + 3.5} textAnchor="end" fontSize="9.5" fill="var(--muted-dim)" fontFamily="Heebo">{fmtILS(nice * f)}</text>
+        </g>
+      ))}
+      <line x1={padL} x2={W - padX} y1={padT + plotH} y2={padT + plotH} stroke="var(--border-light)" />
+      {months.map((m, i) => {
+        const cx = padL + slot * i + slot / 2;
+        const dim = selected && selected !== m.key;
+        const isSel = selected === m.key;
+        return (
+          <g key={m.key} onClick={() => onSelect(isSel ? null : m.key)} style={{ cursor: "pointer" }}>
+            <title>{`${monthLabel(m.key, true)} · הכנסות ${fmtILS(m.revenue)} · הוצאות ${fmtILS(m.expenses)}`}</title>
+            <rect x={padL + slot * i} y={0} width={slot} height={H} fill={isSel ? "var(--gold-wash)" : "transparent"} rx="6" />
+            {bar(cx - barW - 1, m.revenue, "var(--success)", dim)}
+            {bar(cx + 1, m.expenses, "var(--danger)", dim)}
+            <text x={cx} y={H - 7} textAnchor="middle" fontSize="11" fontFamily="Heebo" fontWeight={isSel ? 700 : 400} fill={isSel ? "var(--cream)" : "var(--muted)"}>{monthLabel(m.key)}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/* donut: expenses by category, with a legend that always shows amount + % */
+function ExpenseDonut({ rows, total }) {
+  const [hover, setHover] = useState(null);
+  const R = 62, T = 20, C = 2 * Math.PI * R;
+  let acc = 0;
+  const shown = hover ? rows.find((r) => r.cat === hover) : null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
+      <svg viewBox="0 0 160 160" width="150" height="150" role="img" aria-label="פילוח הוצאות לפי קטגוריה" style={{ flexShrink: 0 }}>
+        <g transform="rotate(-90 80 80)">
+          {rows.map((r) => {
+            const len = (r.amount / total) * C;
+            const gap = rows.length > 1 ? 2 : 0; // 2px surface gap between slices
+            const el = (
+              <circle key={r.cat} cx="80" cy="80" r={R} fill="none" stroke={r.color} strokeWidth={hover === r.cat ? T + 4 : T}
+                strokeDasharray={`${Math.max(0, len - gap)} ${C - Math.max(0, len - gap)}`} strokeDashoffset={-acc}
+                onMouseEnter={() => setHover(r.cat)} onMouseLeave={() => setHover(null)} onClick={() => setHover(hover === r.cat ? null : r.cat)}
+                style={{ cursor: "pointer", transition: "stroke-width .15s" }}>
+                <title>{`${r.cat} · ${fmtILS(r.amount)} · ${Math.round((r.amount / total) * 100)}%`}</title>
+              </circle>
+            );
+            acc += len;
+            return el;
+          })}
+        </g>
+        <text x="80" y="76" textAnchor="middle" fontSize="11" fill="var(--muted)" fontFamily="Heebo">{shown ? shown.cat : "סה״כ הוצאות"}</text>
+        <text x="80" y="96" textAnchor="middle" fontSize="17" fontWeight="800" fill="var(--cream)" fontFamily="Heebo">{fmtILS(shown ? shown.amount : total)}</text>
+      </svg>
+      <div style={{ flex: "1 1 160px", display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+        {rows.map((r) => (
+          <div key={r.cat} onMouseEnter={() => setHover(r.cat)} onMouseLeave={() => setHover(null)} onClick={() => setHover(hover === r.cat ? null : r.cat)}
+            style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, cursor: "pointer", opacity: hover && hover !== r.cat ? 0.5 : 1 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 3, background: r.color, flexShrink: 0 }} />
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.cat}</span>
+            <span className="bb-mono-num" style={{ fontWeight: 700 }}>{fmtILS(r.amount)}</span>
+            <span className="bb-mono-num" style={{ color: "var(--muted)", width: 36, textAlign: "left" }}>{Math.round((r.amount / total) * 100)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function FinanceTab({ appointments, clients, services, expenses, setExpenses, pushToast, undoStash, logActivity }) {
   const [modal, setModal] = useState(null); // null | 'add' | expense obj (edit)
   const [form, setForm] = useState({ description: "", category: EXPENSE_CATEGORIES[0], amount: "", date: fmtDateKey(new Date()) });
   const [errors, setErrors] = useState({});
+  const [month, setMonth] = useState(null); // "YYYY-MM" or null = all time
 
-  const realized = appointments.filter((a) => a.status === "done");
-  const pipeline = appointments.filter((a) => a.status === "confirmed" || a.status === "pending");
+  // last 6 months (incl. current) for the bar chart
+  const monthly = useMemo(() => {
+    const now = new Date();
+    const keys = Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    });
+    return keys.map((key) => ({
+      key,
+      revenue: appointments.filter((a) => a.status === "done" && monthKeyOf(a.date) === key).reduce((s2, a) => s2 + (Number(a.price) || 0), 0),
+      expenses: expenses.filter((e) => monthKeyOf(e.date) === key).reduce((s2, e) => s2 + (Number(e.amount) || 0), 0),
+    }));
+  }, [appointments, expenses]);
+
+  const inMonth = (dateStr) => !month || monthKeyOf(dateStr) === month;
+  const realized = appointments.filter((a) => a.status === "done" && inMonth(a.date));
+  const pipeline = appointments.filter((a) => (a.status === "confirmed" || a.status === "pending") && inMonth(a.date));
+  const periodExpenses = expenses.filter((e) => inMonth(e.date));
   const totalRevenue = realized.reduce((sum, a) => sum + (a.price ?? 0), 0);
   const pipelineRevenue = pipeline.reduce((sum, a) => sum + (a.price ?? 0), 0);
-  const totalExpenses = expenses.reduce((sum, e) => sum + (e.amount ?? 0), 0);
+  const totalExpenses = periodExpenses.reduce((sum, e) => sum + (e.amount ?? 0), 0);
+  const expenseRows = EXPENSE_CATEGORIES
+    .map((cat, i) => ({ cat, color: EXPENSE_COLORS[i] || "var(--muted)", amount: periodExpenses.filter((e) => (EXPENSE_CATEGORIES.includes(e.category) ? e.category : "אחר") === cat).reduce((s2, e) => s2 + (Number(e.amount) || 0), 0) }))
+    .filter((r) => r.amount > 0);
   const netProfit = totalRevenue - totalExpenses;
   const avgTicket = realized.length ? Math.round(totalRevenue / realized.length) : 0;
 
@@ -2566,7 +2697,25 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
 
   return (
     <div>
-      <div className="bb-summary-grid" style={{ gridTemplateColumns: "repeat(2, 1fr)", padding: "16px 16px 6px" }}>
+      <div style={{ padding: "12px 16px 0" }}>
+        <div className="bb-card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>{month ? monthLabel(month, true) : "6 חודשים אחרונים"}</div>
+            {month ? (
+              <button className="bb-btn bb-btn-ghost bb-btn-sm" onClick={() => setMonth(null)}>כל התקופה</button>
+            ) : (
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>לחיצה על חודש = פירוט שלו</span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 14, fontSize: 12.5, color: "var(--muted)", marginBottom: 4 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--success)" }} /> הכנסות</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--danger)" }} /> הוצאות</span>
+          </div>
+          <MonthlyBars months={monthly} selected={month} onSelect={setMonth} />
+        </div>
+      </div>
+
+      <div className="bb-summary-grid" style={{ gridTemplateColumns: "repeat(2, 1fr)", padding: "12px 16px 6px" }}>
         <div className="bb-summary-card">
           <div className="label">הכנסות בפועל</div>
           <div className="value bb-mono-num" style={{ color: "var(--success)" }}>₪{totalRevenue}</div>
@@ -2592,6 +2741,13 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
             הכנסות צפויות מתורים עתידיים (טרם בוצעו): <b style={{ color: "var(--cream)" }}>₪{pipelineRevenue}</b>
           </span>
         </div>
+
+        <SectionTitle title={`פילוח הוצאות${month ? " · " + monthLabel(month, true) : ""}`} />
+        {expenseRows.length === 0 ? (
+          <EmptyState icon={Receipt} title="אין הוצאות בתקופה הזו" subtitle="הוצאות שתוסיפו למטה יתחלקו כאן לפי קטגוריה" />
+        ) : (
+          <div className="bb-card"><ExpenseDonut rows={expenseRows} total={totalExpenses} /></div>
+        )}
 
         <SectionTitle title="הכנסות לפי שירות" />
         {byService.length === 0 ? (
@@ -2635,11 +2791,11 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
           <SectionTitle title="הוצאות" style={{ margin: 0 }} />
           <button className="bb-btn bb-btn-primary bb-btn-sm" onClick={openAdd}><Plus size={15} /> הוצאה חדשה</button>
         </div>
-        {expenses.length === 0 ? (
-          <EmptyState icon={Receipt} title="אין הוצאות רשומות" subtitle="הוסיפו הוצאות עסקיות (שכירות, מוצרים, ציוד) כדי לראות רווח נקי אמיתי" />
+        {periodExpenses.length === 0 ? (
+          <EmptyState icon={Receipt} title={month ? "אין הוצאות בחודש הזה" : "אין הוצאות רשומות"} subtitle="הוסיפו הוצאות עסקיות (שכירות, מוצרים, ציוד) כדי לראות רווח נקי אמיתי" />
         ) : (
           <div className="bb-card" style={{ padding: 0 }}>
-            {[...expenses].sort((a, b) => b.date.localeCompare(a.date)).map((e) => (
+            {[...periodExpenses].sort((a, b) => b.date.localeCompare(a.date)).map((e) => (
               <div key={e.id} className="bb-row">
                 <div style={{ width: 34, height: 34, borderRadius: 10, background: "var(--danger-wash)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <TrendingDown size={15} color="var(--danger)" />
@@ -3324,8 +3480,133 @@ function JournalTab({ journalEntries, setJournalEntries, pushToast, undoStash, l
 }
 
 /* ---------- CLIENTS ---------- */
-function ClientsTab({ clients, setClients, appointments, journalEntries, setJournalEntries, pushToast, undoStash, logActivity }) {
+function MergeClientsModal({ group, appointments, onConfirm, onClose }) {
+  // default: keep the record with the most history
+  const ranked = [...group].sort((a, b) => computeClientStats(b.id, appointments).visits - computeClientStats(a.id, appointments).visits);
+  const [keepId, setKeepId] = useState(ranked[0]?.id);
+  const [name, setName] = useState(ranked[0]?.name || "");
+  const phones = Object.values(
+    group.reduce((m, c) => { const k = normPhone(c.phone); if (k && !m[k]) m[k] = c.phone.trim(); return m; }, {})
+  ); // same number written differently counts once
+  const [phone, setPhone] = useState(ranked.find((c) => c.phone)?.phone || "");
+  const combined = group.reduce(
+    (acc, c) => { const st = computeClientStats(c.id, appointments); return { visits: acc.visits + st.visits, spent: acc.spent + st.totalSpent }; },
+    { visits: 0, spent: 0 }
+  );
+  if (!group.length) return null;
+  return (
+    <Modal title="מיזוג לקוחות" onClose={onClose}>
+      <div style={{ fontSize: 13.5, color: "var(--muted)", marginBottom: 14, lineHeight: 1.6 }}>
+        {group.length} רשומות יהפכו ללקוח אחד. כל התורים והתשלומים עוברים אליו:
+        <b style={{ color: "var(--cream)" }}> {combined.visits} ביקורים · ₪{combined.spent.toLocaleString("he-IL")}</b>
+      </div>
+
+      <div className="bb-field">
+        <label>השם שיישאר</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+          {group.map((c) => (
+            <button key={c.id} type="button" onClick={() => { setKeepId(c.id); setName(c.name); }}
+              className="bb-btn bb-btn-sm" style={{ justifyContent: "space-between", background: name === c.name ? "var(--gold-wash)" : "var(--bg-elevated)", border: `1.5px solid ${name === c.name ? "var(--gold)" : "var(--border)"}`, color: "var(--cream)" }}>
+              <span style={{ fontWeight: 700 }}>{c.name}</span>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>{computeClientStats(c.id, appointments).visits} ביקורים</span>
+            </button>
+          ))}
+        </div>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="או הקלידו שם אחר" />
+      </div>
+
+      {phones.length > 1 && (
+        <div className="bb-field">
+          <label>הטלפון שיישאר</label>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {phones.map((p) => (
+              <button key={p} type="button" onClick={() => setPhone(p)} className="bb-btn bb-btn-sm"
+                style={{ direction: "ltr", background: phone === p ? "var(--gold-wash)" : "var(--bg-elevated)", border: `1.5px solid ${phone === p ? "var(--gold)" : "var(--border)"}`, color: "var(--cream)" }}>{p}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button className="bb-btn bb-btn-primary" style={{ width: "100%", marginTop: 6 }} disabled={name.trim().length < 2}
+        onClick={() => onConfirm({ keepId, name, phone })}>
+        <CheckCheck size={17} /> מזג ל"{name.trim() || "..."}"
+      </button>
+    </Modal>
+  );
+}
+
+const normPhone = (p) => (p || "").replace(/[^0-9]/g, "").replace(/^972/, "0");
+const normName = (n) => (n || "").trim().replace(/\s+/g, " ").toLowerCase();
+
+function ClientsTab({ clients, setClients, appointments, setAppointments, journalEntries, setJournalEntries, pushToast, undoStash, logActivity }) {
   const [modal, setModal] = useState(null); // null | 'add' | client obj (edit)
+  const [mergeMode, setMergeMode] = useState(false);
+  const [mergeSel, setMergeSel] = useState([]); // client ids picked for merging
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [lastMerge, setLastMerge] = useState(null); // snapshot for undo
+
+  // likely duplicates: same phone, or exactly the same name
+  const dupGroups = useMemo(() => {
+    const groups = [];
+    const seen = new Set();
+    const by = (keyFn) => {
+      const map = {};
+      clients.forEach((c) => { const k = keyFn(c); if (k) (map[k] = map[k] || []).push(c); });
+      Object.values(map).forEach((g) => {
+        if (g.length < 2) return;
+        const sig = g.map((c) => c.id).sort().join("|");
+        if (!seen.has(sig)) { seen.add(sig); groups.push(g); }
+      });
+    };
+    by((c) => (normPhone(c.phone).length >= 9 ? normPhone(c.phone) : null));
+    by((c) => normName(c.name) || null);
+    return groups;
+  }, [clients]);
+
+  function startMerge(ids) {
+    setMergeSel(ids);
+    setMergeOpen(true);
+  }
+
+  function applyMerge({ keepId, name, phone }) {
+    const group = clients.filter((c) => mergeSel.includes(c.id));
+    const keep = group.find((c) => c.id === keepId) || group[0];
+    const others = group.filter((c) => c.id !== keep.id);
+    const otherIds = new Set(others.map((c) => c.id));
+    const allNames = new Set(group.map((c) => normName(c.name)));
+    const notes = [...new Set(group.map((c) => (c.note || "").trim()).filter(Boolean))].join(" · ");
+    const merged = { ...keep, name: name.trim(), phone: phone || "", note: notes };
+
+    // appointments: by client id, plus old rows that only carried the name
+    const touches = (a) => otherIds.has(a.clientId) || a.clientId === keep.id || (!a.clientId && allNames.has(normName(a.clientName)));
+    const prevAppts = appointments.filter(touches);
+    const prevJournal = (journalEntries || []).filter((j) => allNames.has(normName(j.clientName)));
+
+    setAppointments((as) => as.map((a) => (touches(a) ? { ...a, clientId: keep.id, clientName: merged.name, phone: a.phone || merged.phone } : a)));
+    if (setJournalEntries) setJournalEntries((js) => js.map((j) => (allNames.has(normName(j.clientName)) ? { ...j, clientName: merged.name } : j)));
+    setClients((cs) => cs.filter((c) => !otherIds.has(c.id)).map((c) => (c.id === keep.id ? merged : c)));
+
+    setLastMerge({ group, prevAppts, prevJournal, name: merged.name, count: group.length });
+    logActivity(`מוזגו ${group.length} לקוחות לשם אחד: ${merged.name} (${group.map((c) => c.name).join(", ")})`);
+    setMergeOpen(false);
+    setMergeMode(false);
+    setMergeSel([]);
+    vibrate(15);
+  }
+
+  function undoMerge() {
+    if (!lastMerge) return;
+    const { group, prevAppts, prevJournal } = lastMerge;
+    const apptById = new Map(prevAppts.map((a) => [a.id, a]));
+    const jById = new Map(prevJournal.map((j) => [j.id, j]));
+    const ids = new Set(group.map((c) => c.id));
+    setAppointments((as) => as.map((a) => apptById.get(a.id) || a));
+    if (setJournalEntries) setJournalEntries((js) => js.map((j) => jById.get(j.id) || j));
+    setClients((cs) => [...group, ...cs.filter((c) => !ids.has(c.id))]);
+    logActivity(`בוטל מיזוג: ${lastMerge.name}`);
+    setLastMerge(null);
+    vibrate(10);
+  }
   const [expanded, setExpanded] = useState(null);
   const [search, setSearch] = useState("");
   const blankForm = { name: "", phone: "", defaultDuration: String(DEFAULT_APPT_DURATION), date: "", time: "", note: "" };
@@ -3336,6 +3617,12 @@ function ClientsTab({ clients, setClients, appointments, journalEntries, setJour
   const visibleClients = q
     ? clients.filter((c) => (c.name || "").toLowerCase().includes(q) || (c.phone || "").includes(q))
     : clients;
+
+  const segCounts = useMemo(() => {
+    const m = {};
+    clients.forEach((c) => { const sg = computeClientStats(c.id, appointments).segment; if (sg) m[sg] = (m[sg] || 0) + 1; });
+    return m;
+  }, [clients, appointments]);
 
   function openAdd() { setForm(blankForm); setErrors({}); setModal("add"); }
   function openEdit(c) { setForm({ name: c.name, phone: c.phone || "", defaultDuration: String(c.defaultDuration ?? DEFAULT_APPT_DURATION), date: "", time: "", note: c.note || "" }); setErrors({}); setModal(c); }
@@ -3377,9 +3664,59 @@ function ClientsTab({ clients, setClients, appointments, journalEntries, setJour
 
   return (
     <div style={{ padding: "0 16px" }}>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 100%", minWidth: 0, marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span className="bb-mono-num" style={{ fontSize: 26, fontWeight: 800, lineHeight: 1 }}>
+              {q ? `${visibleClients.length}/${clients.length}` : clients.length}
+            </span>
+            <span style={{ fontSize: 14, color: "var(--muted)" }}>{q ? "תואמים לחיפוש" : "לקוחות בסה״כ"}</span>
+          </div>
+          {!q && Object.keys(segCounts).length > 0 && (
+            <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 4 }}>
+              {["vip", "regular", "new", "at_risk"].filter((k) => segCounts[k]).map((k) => `${segCounts[k]} ${{ vip: "VIP", regular: "קבועים", new: "חדשים", at_risk: "בסיכון נטישה" }[k]}`).join(" · ")}
+            </div>
+          )}
+        </div>
+        <div style={{ flex: 1 }} />
+        {clients.length > 1 && (
+          <button className={`bb-btn bb-btn-sm ${mergeMode ? "bb-btn-primary" : "bb-btn-ghost"}`} onClick={() => { setMergeMode(!mergeMode); setMergeSel([]); }}>
+            <Users size={15} /> {mergeMode ? "סיום מיזוג" : "מיזוג לקוחות"}
+          </button>
+        )}
         <button className="bb-btn bb-btn-primary bb-btn-sm" onClick={openAdd}><Plus size={15} /> לקוח חדש</button>
       </div>
+
+      {lastMerge && (
+        <div className="bb-card" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, background: "var(--success-wash)", borderColor: "transparent" }}>
+          <CheckCheck size={18} color="var(--success)" />
+          <div style={{ flex: 1, fontSize: 14 }}>{lastMerge.count} לקוחות מוזגו ל<b>{lastMerge.name}</b></div>
+          <button className="bb-btn bb-btn-ghost bb-btn-sm" onClick={undoMerge}><Undo2 size={14} /> ביטול</button>
+        </div>
+      )}
+
+      {mergeMode && (
+        <div className="bb-card" style={{ marginBottom: 14, background: "var(--gold-wash)", borderColor: "transparent", fontSize: 13.5, lineHeight: 1.6 }}>
+          סמנו את כל הרשומות של אותו אדם (2 או יותר) ולחצו <b>מזג</b>. כל התורים והתשלומים יעברו לשם אחד.
+        </div>
+      )}
+
+      {!mergeMode && dupGroups.length > 0 && (
+        <div className="bb-card" style={{ marginBottom: 14, padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "12px 14px 6px", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
+            <AlertTriangle size={15} color="var(--warning)" /> נראה כמו אותו לקוח ({dupGroups.length})
+          </div>
+          {dupGroups.slice(0, 5).map((g) => (
+            <div key={g.map((c) => c.id).join("|")} className="bb-row" style={{ minHeight: 52 }}>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 13.5 }}>
+                {g.map((c) => c.name).join(" · ")}
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>{normPhone(g[0].phone) && g.every((c) => normPhone(c.phone) === normPhone(g[0].phone)) ? `אותו טלפון: ${g[0].phone}` : "אותו שם"}</div>
+              </div>
+              <button className="bb-btn bb-btn-primary bb-btn-sm" onClick={() => startMerge(g.map((c) => c.id))}>מזג</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {clients.length > 0 && (
         <div style={{ position: "relative", marginBottom: 14 }}>
@@ -3411,22 +3748,36 @@ function ClientsTab({ clients, setClients, appointments, journalEntries, setJour
             const seg = stats.segment ? SEGMENT_META[stats.segment] : null;
             return (
               <div key={c.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                <div className="bb-row" style={{ borderBottom: "none", cursor: "pointer" }} onClick={() => setExpanded(isOpen ? null : c.id)}>
-                  <div className="bb-avatar">{initials(c.name)}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                      <span style={{ fontWeight: 600, fontSize: 14.5 }}>{c.name}</span>
+                <div className="bb-row bb-client-row" style={{ borderBottom: "none", cursor: "pointer", background: mergeMode && mergeSel.includes(c.id) ? "var(--gold-wash)" : undefined }}
+                  onClick={() => (mergeMode ? setMergeSel((sel) => (sel.includes(c.id) ? sel.filter((x) => x !== c.id) : [...sel, c.id])) : setExpanded(isOpen ? null : c.id))}>
+                  {mergeMode ? (
+                    <div aria-hidden style={{ width: 26, height: 26, borderRadius: 7, border: `2px solid ${mergeSel.includes(c.id) ? "var(--gold)" : "var(--border-light)"}`, background: mergeSel.includes(c.id) ? "var(--gold)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      {mergeSel.includes(c.id) && <Check size={16} color="var(--on-gold)" strokeWidth={3} />}
+                    </div>
+                  ) : (
+                    <div className="bb-avatar">{initials(c.name)}</div>
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                      <span style={{ fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{c.name}</span>
                       {seg && (
-                        <span className="bb-badge" style={{ background: seg.bg, color: seg.color, display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        <span className="bb-badge" style={{ background: seg.bg, color: seg.color, display: "inline-flex", alignItems: "center", gap: 3, whiteSpace: "nowrap", flexShrink: 0 }}>
                           {stats.segment === "vip" && <Crown size={10} />} {seg.label}
                         </span>
                       )}
                     </div>
-                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{c.phone} · אורך תור: {c.defaultDuration ?? DEFAULT_APPT_DURATION} דק׳</div>
+                    <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <span style={{ direction: "ltr", unicodeBidi: "isolate" }}>{c.phone || "ללא טלפון"}</span>
+                      {(c.defaultDuration ?? DEFAULT_APPT_DURATION) !== DEFAULT_APPT_DURATION ? ` · ${c.defaultDuration} דק׳` : ""}
+                    </div>
                   </div>
-                  <button className="bb-icon-btn" onClick={(e) => { e.stopPropagation(); openEdit(c); }}><Pencil size={15} /></button>
-                  <button className="bb-icon-btn" onClick={(e) => { e.stopPropagation(); del(c); }}><Trash2 size={15} color="var(--danger)" /></button>
-                  <ChevronDown size={16} color="var(--muted)" style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+                  {!mergeMode && (
+                    <>
+                      <button className="bb-icon-btn" onClick={(e) => { e.stopPropagation(); openEdit(c); }}><Pencil size={15} /></button>
+                      <button className="bb-icon-btn" onClick={(e) => { e.stopPropagation(); del(c); }}><Trash2 size={15} color="var(--danger)" /></button>
+                      <ChevronDown size={16} color="var(--muted)" style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+                    </>
+                  )}
                 </div>
                 {isOpen && (
                   <div style={{ padding: "0 16px 16px 16px", background: "var(--bg-elevated)" }}>
@@ -3463,6 +3814,23 @@ function ClientsTab({ clients, setClients, appointments, journalEntries, setJour
             );
           })}
         </div>
+      )}
+
+      {mergeMode && mergeSel.length >= 2 && (
+        <div style={{ position: "sticky", bottom: 12, zIndex: 20, marginTop: 12 }}>
+          <button className="bb-btn bb-btn-primary" style={{ width: "100%", boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }} onClick={() => setMergeOpen(true)}>
+            <Users size={17} /> מזג {mergeSel.length} לקוחות לשם אחד
+          </button>
+        </div>
+      )}
+
+      {mergeOpen && (
+        <MergeClientsModal
+          group={clients.filter((c) => mergeSel.includes(c.id))}
+          appointments={appointments}
+          onConfirm={applyMerge}
+          onClose={() => { setMergeOpen(false); if (!mergeMode) setMergeSel([]); }}
+        />
       )}
 
       {modal && (
