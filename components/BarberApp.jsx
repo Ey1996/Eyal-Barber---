@@ -1178,7 +1178,8 @@ function PinGate({ onSuccess, onClose }) {
    ============================================================================ */
 function ClientView({ businessName, logo, services, appointments, weeklyHours, setAppointments, clients, setClients, pushToast, logActivity, setNotificationLog, onBackToLanding, notifyAdmin }) {
   const [myBookingIds, setMyBookingIds] = useState([]); // appointments booked in this session — powers "התור שלי"
-  const [cancelTokens, setCancelTokens] = useState({}); // id -> secret token, lets this client (only) cancel their own booking
+  const [cancelTokens, setCancelTokens] = useState({});
+  const [bookedDebt, setBookedDebt] = useState(null); // { amount, count } returned by the server after booking // id -> secret token, lets this client (only) cancel their own booking
   const [myApptsOpen, setMyApptsOpen] = useState(false);
   const [step, setStep] = useState(2); // service step skipped: 2 datetime, 3 details, 4 confirm, 5 success
   const [loadingSlots, setLoadingSlots] = useState(false);
@@ -1333,6 +1334,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
         setAppointments((a) => [...a, appt]);
         setMyBookingIds((ids) => [...ids, appt.id]);
         setCancelTokens((t) => ({ ...t, [appt.id]: appt.cancelToken }));
+        setBookedDebt(rpc.debt && Number(rpc.debt.amount) > 0 ? { amount: Number(rpc.debt.amount), count: Number(rpc.debt.count) || 0 } : null);
         vibrate([16, 40, 24]);
         setBookedAppt(appt);
         setSubmitting(false);
@@ -1406,6 +1408,7 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
   }
 
   function resetFlow() {
+    setBookedDebt(null);
     setStep(2);
     setSelectedService(defaultService);
     setSelectedDate(null);
@@ -1643,6 +1646,20 @@ function ClientView({ businessName, logo, services, appointments, weeklyHours, s
             <p style={{ color: "var(--muted-dim)", fontSize: 12, marginBottom: 18, lineHeight: 1.7 }}>
               המספרה תאשר את התור בהקדם. ניתן לעקוב אחרי הסטטוס ב"התור שלי".
             </p>
+
+            {bookedDebt && (
+              <div className="bb-card" style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14, background: "var(--warning-wash)", borderColor: "var(--warning)", textAlign: "start" }}>
+                <Banknote size={22} color="var(--warning)" style={{ flexShrink: 0 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>
+                    יתרה לתשלום: <span className="bb-mono-num">₪{bookedDebt.amount.toLocaleString("he-IL")}</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 2 }}>
+                    {bookedDebt.count === 1 ? "מתור קודם אחד" : `מ-${bookedDebt.count} תורים קודמים`} · אפשר להסדיר בתור הבא
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="bb-card" style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", marginBottom: 22 }}>
               <MessageCircle size={16} color={whatsappStatus === "sent" ? "var(--success)" : "var(--muted)"} />
@@ -2270,6 +2287,8 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
   const [amounts, setAmounts] = useState({}); // id -> edited amount (string)
   const [showFuture, setShowFuture] = useState(false);
   const [justPaid, setJustPaid] = useState([]); // [{ appt (before), amount }] — this session, for undo
+  const [removing, setRemoving] = useState(null); // id of the row showing cancel/delete choices
+  const [removed, setRemoved] = useState([]); // [{ appt (before), kind: "cancel" | "delete" }] — for undo
 
   const nowTs = Date.now();
   const todayKey = fmtDateKey(new Date());
@@ -2307,6 +2326,34 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
     vibrate(15);
   }
 
+  function cancelAppt(a) {
+    save({ ...a, status: "cancelled" });
+    setRemoved((list) => [{ appt: a, kind: "cancel" }, ...list].slice(0, 20));
+    setRemoving(null);
+    logActivity(`תור בוטל מטאב לתשלום: ${a.clientName} · ${a.date} ${a.time}`);
+    vibrate(12);
+  }
+
+  function deleteApptForever(a) {
+    setAppointments((as) => as.filter((x) => x.id !== a.id));
+    setRemoved((list) => [{ appt: a, kind: "delete" }, ...list].slice(0, 20));
+    setRemoving(null);
+    logActivity(`נמחק תור לצמיתות: ${a.clientName} · ${a.date} ${a.time}`);
+    vibrate(12);
+  }
+
+  function undoRemove(entry) {
+    if (entry.kind === "delete") {
+      setAppointments((as) => [...as, entry.appt]);
+      remoteInsertRow("appointments", entry.appt);
+    } else {
+      save(entry.appt);
+    }
+    setRemoved((list) => list.filter((e) => e !== entry));
+    logActivity(`שוחזר תור: ${entry.appt.clientName} · ${entry.appt.date} ${entry.appt.time}`);
+    vibrate(10);
+  }
+
   function undoPaid(entry) {
     const { paidAt, ...rest } = entry.appt;
     save({ ...rest });
@@ -2317,6 +2364,22 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
 
   function renderRow(a) {
     const d = new Date(a.date + "T12:00");
+    if (removing === a.id) {
+      return (
+        <div className="bb-pay-row" key={a.id} style={{ background: "var(--danger-wash)", flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 100%", fontSize: 14, fontWeight: 600 }}>
+            מה לעשות עם התור של {a.clientName}?
+          </div>
+          <button className="bb-btn bb-btn-sm" style={{ flex: 1, background: "var(--bg-card)", border: "1.5px solid var(--danger)", color: "var(--danger)" }} onClick={() => cancelAppt(a)}>
+            <X size={15} /> ביטול תור
+          </button>
+          <button className="bb-btn bb-btn-sm" style={{ flex: 1, background: "var(--danger)", color: "#fff", border: "none" }} onClick={() => deleteApptForever(a)}>
+            <Trash2 size={15} /> מחיקה
+          </button>
+          <button className="bb-btn bb-btn-ghost bb-btn-sm" onClick={() => setRemoving(null)}>חזרה</button>
+        </div>
+      );
+    }
     return (
       <div className="bb-pay-row" key={a.id}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -2343,6 +2406,9 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
         </label>
         <button className="bb-pay-v" onClick={() => markPaid(a)} aria-label={`אשר תשלום של ${a.clientName}`} title="אשר תשלום">
           <Check size={24} strokeWidth={3} />
+        </button>
+        <button className="bb-icon-btn" onClick={() => setRemoving(a.id)} aria-label={`ביטול או מחיקה של התור של ${a.clientName}`} title="ביטול / מחיקה">
+          <X size={18} />
         </button>
       </div>
     );
@@ -2412,7 +2478,27 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
         </div>
       )}
 
-      {!unpaid.length && !justPaid.length && (
+      {removed.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "var(--danger)", padding: "0 4px 8px" }}>הוסרו עכשיו</div>
+          <div className="bb-card" style={{ padding: 0, overflow: "hidden" }}>
+            {removed.map((e, i) => (
+              <div key={e.appt.id + "r" + i} className="bb-pay-row" style={{ minHeight: 52, opacity: 0.85 }}>
+                {e.kind === "delete" ? <Trash2 size={16} color="var(--danger)" /> : <X size={16} color="var(--danger)" />}
+                <div style={{ flex: 1, minWidth: 0, fontSize: 14 }}>
+                  <b>{e.appt.clientName}</b>
+                  <span style={{ color: "var(--muted)", fontSize: 12.5 }}> · {e.kind === "delete" ? "נמחק" : "בוטל"} · {e.appt.time}</span>
+                </div>
+                <button className="bb-btn bb-btn-ghost bb-btn-sm" onClick={() => undoRemove(e)}>
+                  <Undo2 size={14} /> שחזור
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!unpaid.length && !justPaid.length && !removed.length && (
         <EmptyState icon={Banknote} title="אין תורים שממתינים לתשלום" subtitle="כל תור שנקבע יופיע כאן עד שתאשר את התשלום שלו" />
       )}
     </div>
