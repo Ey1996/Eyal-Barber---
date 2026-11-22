@@ -722,7 +722,7 @@ class ErrorBoundary extends React.Component {
 }
 
 export default function BarberApp() {
-  const ADMIN_EMAIL_DEFAULT = "eyalmeoded1@gmail.com";
+  const ADMIN_EMAIL_DEFAULT = ""; // set in Settings (stored in the database), never hard-coded in the public code
   const [view, setView] = useState("landing"); // landing | client | admin
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [googleSignInOpen, setGoogleSignInOpen] = useState(false);
@@ -2291,6 +2291,50 @@ function FinanceStat({ label, value, highlight }) {
   );
 }
 
+/* ---------- payment methods ---------- */
+const PAY_METHODS = [
+  { id: "cash", label: "מזומן", color: "var(--series-3)" },
+  { id: "bit", label: "ביט", color: "var(--series-1)" },
+  { id: "paybox", label: "פייבוקס", color: "var(--series-4)" },
+];
+const payLabel = (id) => PAY_METHODS.find((m) => m.id === id)?.label || "";
+
+function PayMethodButtons({ value, onPick, size = "md" }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, width: "100%" }}>
+      {PAY_METHODS.map((m) => (
+        <button key={m.id} type="button" onClick={() => onPick(m.id)} className="bb-btn"
+          style={{
+            minHeight: size === "sm" ? 44 : 52, padding: "6px 4px", fontSize: size === "sm" ? 14.5 : 16, fontWeight: 700,
+            background: value === m.id ? "var(--gold)" : "var(--bg-elevated)",
+            color: value === m.id ? "var(--on-gold)" : "var(--cream)",
+            border: `1.5px solid ${value === m.id ? "var(--gold)" : "var(--border-light)"}`,
+          }}>
+          {m.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* small "how was it paid?" window — used when an appointment is set to "הושלם" */
+function PayMethodModal({ appt, onPick, onClose }) {
+  return (
+    <div className="bb-modal-backdrop" style={{ alignItems: "center", zIndex: 9700 }} onClick={onClose}>
+      <div className="bb-modal" style={{ borderRadius: 20, maxWidth: 360 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ textAlign: "center", marginBottom: 14 }}>
+          <div className="bb-serif" style={{ fontSize: 18, fontWeight: 700 }}>איך שולם?</div>
+          <div style={{ fontSize: 13.5, color: "var(--muted)", marginTop: 4 }}>
+            {appt.clientName} · <span className="bb-mono-num">₪{Number(appt.price) || 0}</span>
+          </div>
+        </div>
+        <PayMethodButtons onPick={onPick} />
+        <button className="bb-btn bb-btn-ghost" style={{ width: "100%", marginTop: 10 }} onClick={onClose}>ביטול</button>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- UNPAID — every booked appointment whose payment wasn't confirmed yet ----------
    "Paid" in this app = status "done" with the final price (that's what Finance counts as revenue). */
 function isUnpaid(a) {
@@ -2302,6 +2346,7 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
   const [showFuture, setShowFuture] = useState(false);
   const [justPaid, setJustPaid] = useState([]); // [{ appt (before), amount }] — this session, for undo
   const [removing, setRemoving] = useState(null); // id of the row showing cancel/delete choices
+  const [paying, setPaying] = useState(null); // id of the row asking "how was it paid?"
   const [removed, setRemoved] = useState([]); // [{ appt (before), kind: "cancel" | "delete" }] — for undo
 
   const nowTs = Date.now();
@@ -2331,12 +2376,13 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
     });
   }
 
-  function markPaid(a) {
+  function markPaid(a, method) {
     const amount = Math.max(0, Math.round(Number(amountOf(a)) || 0));
-    save({ ...a, status: "done", price: amount, paidAt: Date.now() });
-    setJustPaid((list) => [{ appt: a, amount }, ...list].slice(0, 20));
+    save({ ...a, status: "done", price: amount, paidAt: Date.now(), paymentMethod: method });
+    setJustPaid((list) => [{ appt: a, amount, method }, ...list].slice(0, 20));
     setAmounts((m) => { const n = { ...m }; delete n[a.id]; return n; });
-    logActivity(`תשלום אושר: ${a.clientName} · ₪${amount} · ${a.date} ${a.time}`);
+    setPaying(null);
+    logActivity(`תשלום אושר: ${a.clientName} · ₪${amount} · ${payLabel(method)} · ${a.date} ${a.time}`);
     vibrate(15);
   }
 
@@ -2369,7 +2415,7 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
   }
 
   function undoPaid(entry) {
-    const { paidAt, ...rest } = entry.appt;
+    const { paidAt, paymentMethod, ...rest } = entry.appt;
     save({ ...rest });
     setJustPaid((list) => list.filter((e) => e !== entry));
     logActivity(`בוטל אישור תשלום: ${entry.appt.clientName} · ${entry.appt.date} ${entry.appt.time}`);
@@ -2378,6 +2424,17 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
 
   function renderRow(a) {
     const d = new Date(a.date + "T12:00");
+    if (paying === a.id) {
+      return (
+        <div className="bb-pay-row" key={a.id} style={{ background: "var(--success-wash)", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ flex: 1, fontSize: 14, fontWeight: 700 }}>
+            איך {a.clientName} שילם? <span className="bb-mono-num" style={{ color: "var(--muted)", fontWeight: 600 }}>₪{amountOf(a)}</span>
+          </div>
+          <button className="bb-icon-btn" onClick={() => setPaying(null)} aria-label="חזרה"><X size={18} /></button>
+          <PayMethodButtons size="sm" onPick={(method) => markPaid(a, method)} />
+        </div>
+      );
+    }
     if (removing === a.id) {
       return (
         <div className="bb-pay-row" key={a.id} style={{ background: "var(--danger-wash)", flexWrap: "wrap" }}>
@@ -2414,11 +2471,11 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
             value={amountOf(a)}
             onFocus={(e) => e.target.select()}
             onChange={(e) => setAmounts((m) => ({ ...m, [a.id]: e.target.value }))}
-            onKeyDown={(e) => e.key === "Enter" && markPaid(a)}
+            onKeyDown={(e) => e.key === "Enter" && setPaying(a.id)}
             aria-label={`סכום לתשלום של ${a.clientName}`}
           />
         </label>
-        <button className="bb-pay-v" onClick={() => markPaid(a)} aria-label={`אשר תשלום של ${a.clientName}`} title="אשר תשלום">
+        <button className="bb-pay-v" onClick={() => { setRemoving(null); setPaying(a.id); }} aria-label={`אשר תשלום של ${a.clientName}`} title="אשר תשלום">
           <Check size={24} strokeWidth={3} />
         </button>
         <button className="bb-icon-btn" onClick={() => setRemoving(a.id)} aria-label={`ביטול או מחיקה של התור של ${a.clientName}`} title="ביטול / מחיקה">
@@ -2480,7 +2537,7 @@ function UnpaidTab({ appointments, setAppointments, services, pushToast, logActi
               <div key={e.appt.id + i} className="bb-pay-row" style={{ minHeight: 52, opacity: 0.85 }}>
                 <Check size={18} color="var(--success)" />
                 <div style={{ flex: 1, minWidth: 0, fontSize: 14 }}>
-                  <b>{e.appt.clientName}</b> · <span className="bb-mono-num">₪{e.amount}</span>
+                  <b>{e.appt.clientName}</b> · <span className="bb-mono-num">₪{e.amount}</span>{e.method ? ` · ${payLabel(e.method)}` : ""}
                   <span style={{ color: "var(--muted)", fontSize: 12.5 }}> · {e.appt.time}</span>
                 </div>
                 <button className="bb-btn bb-btn-ghost bb-btn-sm" onClick={() => undoPaid(e)}>
@@ -2613,6 +2670,11 @@ function MonthlyBars({ months, selected, onSelect }) {
           <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
             {tip.kind === "revenue" ? `${tipMonth.revenueCount} תורים ששולמו` : `${tipMonth.expenseCount} הוצאות`}
           </div>
+          {tip.kind === "revenue" && tipMonth.byMethod?.length > 0 && (
+            <div style={{ fontSize: 11.5, color: "var(--cream)", marginTop: 3, borderTop: "1px solid var(--border)", paddingTop: 3 }}>
+              {tipMonth.byMethod.map((x) => `${x.label} ${fmtILS(x.amount)}`).join(" · ")}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -2682,6 +2744,7 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
         key,
         revenue: done.reduce((s2, a) => s2 + (Number(a.price) || 0), 0),
         revenueCount: done.length,
+        byMethod: PAY_METHODS.map((pm) => ({ ...pm, amount: done.filter((a) => a.paymentMethod === pm.id).reduce((s2, a) => s2 + (Number(a.price) || 0), 0) })).filter((x) => x.amount > 0),
         expenses: exps.reduce((s2, e) => s2 + (Number(e.amount) || 0), 0),
         expenseCount: exps.length,
       };
@@ -2693,6 +2756,16 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
   const pipeline = appointments.filter((a) => (a.status === "confirmed" || a.status === "pending") && inMonth(a.date));
   const periodExpenses = expenses.filter((e) => inMonth(e.date));
   const totalRevenue = realized.reduce((sum, a) => sum + (a.price ?? 0), 0);
+  const methodRows = [
+    ...PAY_METHODS.map((pm) => {
+      const list = realized.filter((a) => a.paymentMethod === pm.id);
+      return { ...pm, count: list.length, amount: list.reduce((s2, a) => s2 + (Number(a.price) || 0), 0) };
+    }),
+    (() => {
+      const list = realized.filter((a) => !PAY_METHODS.some((pm) => pm.id === a.paymentMethod));
+      return { id: "none", label: "לא צוין", color: "var(--muted-dim)", count: list.length, amount: list.reduce((s2, a) => s2 + (Number(a.price) || 0), 0) };
+    })(),
+  ].filter((r) => r.count > 0);
   const pipelineRevenue = pipeline.reduce((sum, a) => sum + (a.price ?? 0), 0);
   const totalExpenses = periodExpenses.reduce((sum, e) => sum + (e.amount ?? 0), 0);
   const expenseRows = EXPENSE_CATEGORIES
@@ -2807,6 +2880,31 @@ function FinanceTab({ appointments, clients, services, expenses, setExpenses, pu
               centerLabel={netProfit >= 0 ? "רווח" : "הפסד"}
               centerValue={netProfit}
             />
+          </div>
+        )}
+
+        <SectionTitle title={`הכנסות לפי אמצעי תשלום${month ? " · " + monthLabel(month, true) : ""}`} />
+        {methodRows.length === 0 ? (
+          <EmptyState icon={Banknote} title="אין תשלומים בתקופה הזו" subtitle="כל תשלום שתאשרו יסומן כמזומן, ביט או פייבוקס ויופיע כאן" />
+        ) : (
+          <div className="bb-card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {methodRows.map((r) => {
+              const pct = totalRevenue > 0 ? Math.round((r.amount / totalRevenue) * 100) : 0;
+              return (
+                <div key={r.id}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 5 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 3, background: r.color, flexShrink: 0, alignSelf: "center" }} />
+                    <span style={{ fontWeight: 700, fontSize: 14.5, flex: 1 }}>{r.label}</span>
+                    <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{r.count === 1 ? "תשלום אחד" : `${r.count} תשלומים`}</span>
+                    <span className="bb-mono-num" style={{ fontWeight: 800, fontSize: 15 }}>{fmtILS(r.amount)}</span>
+                    <span className="bb-mono-num" style={{ fontSize: 12.5, color: "var(--muted)", width: 34, textAlign: "left" }}>{pct}%</span>
+                  </div>
+                  <div style={{ height: 8, borderRadius: 4, background: "var(--bg-hover)", overflow: "hidden" }}>
+                    <div style={{ width: `${pct}%`, height: "100%", background: r.color, borderRadius: 4 }} />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -2929,6 +3027,7 @@ function AppointmentRow({ appt, compact, onStatusChange, onEdit, onDelete }) {
           <span className="bb-mono-num" style={{ color: "var(--cream)", fontWeight: 600 }}>{appt.time}</span>
           {!compact && (() => { const d = new Date(appt.date + "T12:00"); return ` · ${DOW_HE[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`; })()}
           {(appt.duration ?? DEFAULT_APPT_DURATION) !== DEFAULT_APPT_DURATION ? ` · ${appt.duration} דק׳` : ""}
+          {appt.status === "done" && appt.paymentMethod ? ` · ${payLabel(appt.paymentMethod)}` : ""}
         </div>
         <div style={{ fontSize: 12.5, color: "var(--muted-dim)", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{appt.serviceName}</div>
       </div>
@@ -2969,11 +3068,28 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
   const sorted = [...appointments].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const filtered = filter === "all" ? sorted : sorted.filter((a) => a.status === filter);
 
+  const [askPay, setAskPay] = useState(null); // appointment waiting for "how was it paid?"
+
   function updateStatus(id, status) {
-    setAppointments((appts) => appts.map((a) => (a.id === id ? { ...a, status } : a)));
-    remoteSetAppointmentStatus(id, status);
     const a = appointments.find((x) => x.id === id);
+    if (status === "done" && a && a.status !== "done") { setAskPay(a); return; }
+    setAppointments((appts) => appts.map((x) => {
+      if (x.id !== id) return x;
+      const next = { ...x, status };
+      if (status !== "done") delete next.paymentMethod;
+      return next;
+    }));
+    remoteSetAppointmentStatus(id, status);
     logActivity(`סטטוס התור של ${a?.clientName} עודכן ל"${status}"`);
+  }
+
+  function confirmPaid(a, method) {
+    const updated = { ...a, status: "done", paymentMethod: method, paidAt: Date.now() };
+    setAppointments((appts) => appts.map((x) => (x.id === a.id ? updated : x)));
+    remoteInsertRow("appointments", updated);
+    logActivity(`תשלום אושר: ${a.clientName} · ₪${Number(a.price) || 0} · ${payLabel(method)}`);
+    setAskPay(null);
+    vibrate(15);
   }
 
   function saveAppt(updated) {
@@ -3035,6 +3151,9 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
           <button className={viewMode === "week" ? "active" : ""} onClick={() => setViewMode("week")}>
             <CalendarDays size={13} style={{ display: "inline", verticalAlign: "-2px", marginLeft: 4 }} />יומן
           </button>
+          <button className={viewMode === "day" ? "active" : ""} onClick={() => setViewMode("day")}>
+            <CalendarClock size={13} style={{ display: "inline", verticalAlign: "-2px", marginLeft: 4 }} />יום
+          </button>
           <button className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>
             <List size={13} style={{ display: "inline", verticalAlign: "-2px", marginLeft: 4 }} />רשימה
           </button>
@@ -3042,7 +3161,14 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
         <button className="bb-btn bb-btn-primary bb-btn-sm" onClick={() => setCreatingAppt(true)}><Plus size={15} /> תור חדש</button>
       </div>
 
-      {viewMode === "week" ? (
+      {viewMode === "day" ? (
+        <DayView
+          appointments={appointments}
+          weeklyHours={weeklyHours}
+          onSelect={(a) => setEditingAppt(a)}
+          onCreateAt={(date, time) => setCreatingAppt({ date, time })}
+        />
+      ) : viewMode === "week" ? (
         <WeekCalendar
           appointments={appointments}
           weeklyHours={weeklyHours}
@@ -3081,6 +3207,7 @@ function AppointmentsTab({ appointments, setAppointments, services, clients, set
       {editingAppt && (
         <EditAppointmentModal appt={editingAppt} services={services} clients={clients} onSave={saveAppt} onClose={() => setEditingAppt(null)} />
       )}
+      {askPay && <PayMethodModal appt={askPay} onPick={(m) => confirmPaid(askPay, m)} onClose={() => setAskPay(null)} />}
       {creatingAppt && (
         <EditAppointmentModal appt={null} initial={typeof creatingAppt === "object" ? creatingAppt : null} services={services} clients={clients} onSave={createAppt} onClose={() => setCreatingAppt(false)} />
       )}
@@ -3282,6 +3409,186 @@ function WeekCalendar({ appointments, weeklyHours, weekOffset, setWeekOffset, on
   );
 }
 
+/* ---------- DAY VIEW — one day, big hour rail, tappable free slots, swipe between days ---------- */
+function DayView({ appointments, weeklyHours, onSelect, onCreateAt }) {
+  const isOpen = (d) => !weeklyHours?.[d.getDay()]?.closed;
+  const startDay = (() => {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    for (let i = 0; i < 14; i++) { if (isOpen(d)) return d; d.setDate(d.getDate() + 1); }
+    return new Date();
+  })();
+  const [day, setDay] = useState(startDay);
+  const touch = useRef(null);
+  const [, setTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 60000); return () => clearInterval(t); }, []);
+
+  const key = fmtDateKey(day);
+  const todayKey = fmtDateKey(new Date());
+  const hours = weeklyHours?.[day.getDay()] || { open: "09:00", close: "20:00", closed: false };
+  const dayAppts = appointments
+    .filter((a) => a.date === key && a.status !== "cancelled")
+    .sort((a, b) => a.time.localeCompare(b.time));
+  const expected = dayAppts.reduce((s2, a) => s2 + (Number(a.price) || 0), 0);
+
+  // step to the previous / next open day
+  function step(dir) {
+    const d = new Date(day);
+    for (let i = 0; i < 14; i++) {
+      d.setDate(d.getDate() + dir);
+      if (isOpen(d) || appointments.some((a) => a.date === fmtDateKey(d) && a.status !== "cancelled")) { setDay(new Date(d)); vibrate(8); return; }
+    }
+  }
+
+  // week strip (Sun..Sat) around the selected day
+  const weekStart = new Date(day); weekStart.setDate(day.getDate() - day.getDay());
+  const strip = Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d; });
+
+  // timeline: opening hours, widened to any appointment outside them
+  let startMin = hours.closed ? 9 * 60 : timeToMinutes(hours.open);
+  let endMin = hours.closed ? 20 * 60 : timeToMinutes(hours.close);
+  dayAppts.forEach((a) => {
+    const s0 = timeToMinutes(a.time);
+    startMin = Math.min(startMin, Math.floor(s0 / SLOT_MINUTES) * SLOT_MINUTES);
+    endMin = Math.max(endMin, s0 + (Number(a.duration) || DEFAULT_APPT_DURATION));
+  });
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const isToday = key === todayKey;
+  const isPastDay = key < todayKey;
+
+  // build the rows: appointment cards + free 20-min slots (future only)
+  const items = [];
+  let t = startMin;
+  while (t < endMin) {
+    const appt = dayAppts.find((a) => { const s0 = timeToMinutes(a.time); return s0 >= t && s0 < t + SLOT_MINUTES; });
+    if (appt) {
+      const s0 = timeToMinutes(appt.time);
+      items.push({ kind: "appt", at: s0, appt });
+      t = Math.max(t + SLOT_MINUTES, Math.ceil((s0 + (Number(appt.duration) || DEFAULT_APPT_DURATION)) / SLOT_MINUTES) * SLOT_MINUTES);
+      continue;
+    }
+    const covered = dayAppts.some((a) => { const s0 = timeToMinutes(a.time); return s0 < t && s0 + (Number(a.duration) || DEFAULT_APPT_DURATION) > t; });
+    if (!covered && !hours.closed && !isPastDay && !(isToday && t + SLOT_MINUTES <= nowMin)) items.push({ kind: "free", at: t });
+    t += SLOT_MINUTES;
+  }
+  const byHour = {};
+  items.forEach((it) => { const h = Math.floor(it.at / 60); (byHour[h] = byHour[h] || []).push(it); });
+  const hourKeys = Object.keys(byHour).map(Number).sort((a, b) => a - b);
+  const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  const ST = WEEK_STATUS_COLORS;
+  const stLabel = { pending: "ממתין", confirmed: "מאושר", done: "הושלם" };
+
+  return (
+    <div
+      onTouchStart={(e) => { touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
+      onTouchEnd={(e) => {
+        if (!touch.current) return;
+        const dx = e.changedTouches[0].clientX - touch.current.x;
+        const dy = e.changedTouches[0].clientY - touch.current.y;
+        touch.current = null;
+        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) step(dx < 0 ? 1 : -1); // swipe left = next day
+      }}
+    >
+      {/* header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <button className="bb-icon-btn" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }} onClick={() => step(-1)} aria-label="יום קודם">
+          <ChevronRight size={18} />
+        </button>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 800 }}>
+            {isToday ? "היום · " : ""}יום {DOW_FULL_HE[day.getDay()]}, {day.getDate()}/{day.getMonth() + 1}
+          </div>
+          <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
+            {hours.closed && !dayAppts.length ? "המספרה סגורה" : `${dayAppts.length} תורים · ₪${expected.toLocaleString("he-IL")} צפוי`}
+          </div>
+        </div>
+        <button className="bb-icon-btn" style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }} onClick={() => step(1)} aria-label="יום הבא">
+          <ChevronLeft size={18} />
+        </button>
+      </div>
+
+      {/* week strip */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
+        {strip.map((d) => {
+          const k = fmtDateKey(d);
+          const on = k === key;
+          const open = isOpen(d);
+          const has = appointments.some((a) => a.date === k && a.status !== "cancelled");
+          return (
+            <button key={k} onClick={() => setDay(new Date(d))}
+              style={{
+                flex: 1, border: "none", cursor: "pointer", borderRadius: 12, padding: "7px 0", fontFamily: "Heebo",
+                background: on ? "var(--gold)" : "transparent", color: on ? "var(--on-gold)" : "var(--muted)",
+                opacity: !open && !has && !on ? 0.4 : 1,
+              }}>
+              <div style={{ fontSize: 12 }}>{DOW_HE[d.getDay()]}</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: on ? "var(--on-gold)" : k === todayKey ? "var(--accent-2)" : "var(--cream)" }}>{d.getDate()}</div>
+              <div style={{ width: 5, height: 5, borderRadius: "50%", margin: "2px auto 0", background: has ? (on ? "var(--on-gold)" : "var(--gold)") : "transparent" }} />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* timeline */}
+      {hourKeys.length === 0 ? (
+        <EmptyState icon={CalendarDays} title={hours.closed ? "המספרה סגורה ביום הזה" : "אין תורים ואין שעות פנויות"} subtitle="החליקו או לחצו על החצים כדי לעבור יום" />
+      ) : (
+        <div>
+          {hourKeys.map((h) => (
+            <div key={h} style={{ display: "flex", gap: 10, minHeight: 44 }}>
+              <div className="bb-mono-num" style={{ width: 42, fontSize: 12.5, fontWeight: 700, color: "var(--muted-dim)", paddingTop: 6, direction: "ltr", textAlign: "center", flexShrink: 0 }}>
+                {String(h).padStart(2, "0")}:00
+              </div>
+              <div style={{ flex: 1, minWidth: 0, borderTop: "1px solid var(--border)", padding: "5px 0", display: "flex", flexDirection: "column", gap: 5 }}>
+                {byHour[h].map((it, idx) => {
+                  const showNow = isToday && nowMin >= it.at && (idx === byHour[h].length - 1 || nowMin < byHour[h][idx + 1].at) && Math.floor(nowMin / 60) === h;
+                  const nowLine = showNow ? (
+                    <div key={"now" + it.at} style={{ height: 2, background: "var(--danger)", position: "relative", margin: "1px 0" }}>
+                      <span style={{ position: "absolute", right: -5, top: -4, width: 10, height: 10, borderRadius: "50%", background: "var(--danger)" }} />
+                    </div>
+                  ) : null;
+                  if (it.kind === "free") {
+                    return (
+                      <React.Fragment key={"f" + it.at}>
+                        <button onClick={() => { vibrate(10); onCreateAt(key, hhmm(it.at)); }}
+                          style={{ border: "1.5px dashed var(--border-light)", background: "transparent", borderRadius: 12, padding: "9px 12px", fontFamily: "Heebo", fontSize: 13.5, fontWeight: 600, color: "var(--muted)", textAlign: "start", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                          <Plus size={15} /> <span className="bb-mono-num">{hhmm(it.at)}</span> פנוי
+                        </button>
+                        {nowLine}
+                      </React.Fragment>
+                    );
+                  }
+                  const a = it.appt;
+                  const c = ST[a.status] || ST.confirmed;
+                  const dur = Number(a.duration) || DEFAULT_APPT_DURATION;
+                  return (
+                    <React.Fragment key={a.id}>
+                      <div onClick={() => onSelect(a)}
+                        style={{ background: c.bg, borderInlineStart: `4px solid ${c.border}`, borderRadius: 12, padding: "9px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, minHeight: 50 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.clientName}</div>
+                          <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
+                            <span className="bb-mono-num">{a.time}</span>
+                            {dur !== DEFAULT_APPT_DURATION ? ` · ${dur} דק׳` : ""}
+                            {a.status === "done" && a.paymentMethod ? ` · ${payLabel(a.paymentMethod)} ✓` : ""}
+                          </div>
+                        </div>
+                        <span className={`bb-badge ${a.status}`} style={{ flexShrink: 0 }}>{stLabel[a.status] || a.status}</span>
+                      </div>
+                      {nowLine}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ textAlign: "center", fontSize: 12, color: "var(--muted-dim)", marginTop: 10 }}>החלקה לצדדים = יום קודם / הבא · לחיצה על "פנוי" = תור חדש</div>
+    </div>
+  );
+}
+
 /* ---------- FULL MANUAL EDIT — every field on an appointment, one button away ---------- */
 function EditAppointmentModal({ appt, initial = null, services, clients = [], onSave, onClose }) {
   const isCreate = !appt;
@@ -3296,6 +3603,7 @@ function EditAppointmentModal({ appt, initial = null, services, clients = [], on
     duration: appt?.duration ?? DEFAULT_APPT_DURATION,
     price: appt?.price ?? (defaultSvc?.price ?? 0),
     status: appt?.status || "confirmed",
+    paymentMethod: appt?.paymentMethod || "",
   });
   const [errors, setErrors] = useState({});
   const [showSuggest, setShowSuggest] = useState(false);
@@ -3322,6 +3630,7 @@ function EditAppointmentModal({ appt, initial = null, services, clients = [], on
 
   function save() {
     const v = validateAppointment(form);
+    if (form.status === "done" && !form.paymentMethod) v.paymentMethod = "בחרו איך שולם";
     setErrors(v);
     if (Object.keys(v).length) return;
     const service = services.find((s) => s.id === form.serviceId) || services.find((s) => s.id === appt?.serviceId);
@@ -3336,7 +3645,13 @@ function EditAppointmentModal({ appt, initial = null, services, clients = [], on
       price: Number(form.price),
       status: form.status,
     };
-    onSave(isCreate ? { ...payload, existingClientId: selectedClientId || null } : { ...appt, ...payload });
+    if (form.status === "done") {
+      payload.paymentMethod = form.paymentMethod;
+      if (appt?.status !== "done" || !appt?.paidAt) payload.paidAt = Date.now();
+    }
+    const base = isCreate ? { ...payload, existingClientId: selectedClientId || null } : { ...appt, ...payload };
+    if (form.status !== "done") { delete base.paymentMethod; delete base.paidAt; }
+    onSave(base);
   }
 
   return (
@@ -3438,6 +3753,13 @@ function EditAppointmentModal({ appt, initial = null, services, clients = [], on
           <option value="cancelled">בוטל</option>
         </select>
       </div>
+      {form.status === "done" && (
+        <div className="bb-field" style={{ background: "var(--success-wash)", borderRadius: 12, padding: 12 }}>
+          <label style={{ fontWeight: 700 }}>איך שולם?</label>
+          <PayMethodButtons size="sm" value={form.paymentMethod} onPick={(m) => setForm({ ...form, paymentMethod: m })} />
+          <FieldError msg={errors.paymentMethod} />
+        </div>
+      )}
       <button className="bb-btn bb-btn-primary" style={{ width: "100%" }} onClick={save}>{isCreate ? "קביעת תור" : "שמירת שינויים"}</button>
     </Modal>
   );
