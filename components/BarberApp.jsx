@@ -1074,13 +1074,21 @@ function PinGate({ onSuccess, onClose }) {
     return () => { alive = false; };
   }, []);
 
+  // the saved Face ID may be gone (other browser, cleared, new phone):
+  // forget it, so after the code the app offers to set it up again
+  function forgetBiometric(msg) {
+    try { window.localStorage.removeItem(BIO_KEY); } catch (e) {}
+    setBioSaved(false);
+    setBioError(msg);
+  }
+
   async function tryBiometric() {
     setBioError("");
     try {
       if (await verifyBiometric()) { vibrate(15); onSuccess(); return; }
-      setBioError("הזיהוי לא הצליח — אפשר להיכנס עם הקוד");
+      forgetBiometric("הזיהוי לא הצליח. הכניסו את הקוד, ונפעיל זיהוי פנים מחדש");
     } catch (e) {
-      setBioError("הזיהוי בוטל — אפשר להיכנס עם הקוד");
+      forgetBiometric("זיהוי הפנים לא נמצא בטלפון הזה. הכניסו את הקוד, ונפעיל אותו מחדש");
     }
   }
 
@@ -1149,9 +1157,15 @@ function PinGate({ onSuccess, onClose }) {
         <p style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: bioSaved ? 12 : 20 }}>הזינו את קוד הגישה</p>
 
         {bioSaved && (
-          <button className="bb-btn bb-btn-primary" style={{ width: "100%", marginBottom: 16 }} onClick={tryBiometric}>
-            <ScanFace size={18} /> כניסה עם זיהוי פנים
-          </button>
+          <>
+            <button className="bb-btn bb-btn-primary" style={{ width: "100%", marginBottom: 6 }} onClick={tryBiometric}>
+              <ScanFace size={18} /> כניסה עם זיהוי פנים
+            </button>
+            <button className="bb-btn bb-btn-ghost bb-btn-sm" style={{ width: "100%", marginBottom: 12, fontSize: 12.5 }}
+              onClick={() => forgetBiometric("הכניסו את הקוד, ונפעיל זיהוי פנים מחדש בטלפון הזה")}>
+              זיהוי הפנים לא עובד? הפעלה מחדש
+            </button>
+          </>
         )}
         {bioError && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: -8, marginBottom: 12 }}>{bioError}</div>}
 
