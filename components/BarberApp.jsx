@@ -681,6 +681,49 @@ const THEMES = {
       "--gold-wash": "rgba(200, 127, 81, 0.12)", "--cream": "#F0E7DE",
     },
   },
+  forest: {
+    label: "ירוק יער וקרם",
+    swatch: "linear-gradient(135deg, #173026 50%, #C9A25A 50%)",
+    vars: {
+      "--bg": "#0F211A", "--bg-elevated": "#142A21", "--bg-card": "#173026", "--bg-hover": "#1D3A2E",
+      "--border": "#244236", "--border-light": "#2F5143",
+      "--gold": "#C9A25A", "--gold-bright": "#E4C688", "--gold-dim": "#8C7340",
+      "--gold-wash": "rgba(201, 162, 90, 0.12)", "--cream": "#EFE7D6",
+      "--muted": "#A9B5A6", "--muted-dim": "#87958A",
+      "--on-gold": "#1A1509", "--topbar-bg": "rgba(15, 33, 26, 0.92)",
+    },
+  },
+  barber: {
+    label: "ברבר קלאסי (בהיר)",
+    swatch: "linear-gradient(135deg, #F2EBDD 33%, #8B1E1E 33% 66%, #1F3A5F 66%)",
+    vars: {
+      "--bg": "#F2EBDD", "--bg-elevated": "#F8F3E9", "--bg-card": "#FFFDF8", "--bg-hover": "#EBE2D1",
+      "--border": "#E0D6C3", "--border-light": "#CFC2AA",
+      "--gold": "#8B1E1E", "--gold-bright": "#6E1414", "--gold-dim": "#B86A6A",
+      "--gold-wash": "rgba(139, 30, 30, 0.08)", "--cream": "#1C1C1C",
+      "--muted": "#5E574C", "--muted-dim": "#776F62",
+      "--success": "#2E6B4A", "--success-wash": "rgba(46, 107, 74, 0.1)",
+      "--danger": "#A32626", "--danger-wash": "rgba(163, 38, 38, 0.08)",
+      "--warning": "#A0601A", "--warning-wash": "rgba(160, 96, 26, 0.1)",
+      "--on-gold": "#FFFFFF", "--topbar-bg": "rgba(242, 235, 221, 0.92)",
+      "--accent-2": "#1F3A5F", "--on-accent-2": "#FFFFFF",
+      "--series-1": "#2a78d6", "--series-2": "#eb6834", "--series-3": "#1baf7a",
+      "--series-4": "#eda100", "--series-5": "#e87ba4", "--series-6": "#008300", "--series-7": "#6250d6",
+      "--exp-1": "#C8443A", "--exp-2": "#8F2C25", "--exp-3": "#E58A80", "--exp-4": "#6B211C", "--exp-5": "#F0B4AC", "--exp-6": "#B8644F",
+    },
+  },
+  leather: {
+    label: "עור וקוניאק",
+    swatch: "linear-gradient(135deg, #241911 50%, #C9782F 50%)",
+    vars: {
+      "--bg": "#17100B", "--bg-elevated": "#1E150E", "--bg-card": "#241911", "--bg-hover": "#2E2016",
+      "--border": "#35261A", "--border-light": "#453222",
+      "--gold": "#C9782F", "--gold-bright": "#E6A05C", "--gold-dim": "#8A5222",
+      "--gold-wash": "rgba(201, 120, 47, 0.12)", "--cream": "#F4E9DC",
+      "--muted": "#B9A491", "--muted-dim": "#94806E",
+      "--on-gold": "#1A0E05", "--topbar-bg": "rgba(23, 16, 11, 0.92)",
+    },
+  },
 };
 
 /* ============================================================================
@@ -4610,7 +4653,7 @@ function SettingsTab({ notificationLog, adminEmail, setAdminEmail, themeId, setT
 
       <SectionTitle title="עיצוב" />
       <div className="bb-card">
-        <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 12 }}>בחרו פלטת צבעים כהה לעיצוב האפליקציה</div>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 12 }}>בחרו פלטת צבעים לעיצוב האפליקציה</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
           {Object.entries(THEMES).map(([id, t]) => (
             <button
